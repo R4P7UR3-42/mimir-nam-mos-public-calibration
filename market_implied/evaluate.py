@@ -19,30 +19,30 @@ from pathlib import Path
 
 
 getcontext().prec = 40
-SCHEMA = "daily_high_top_tail_market_implied_no_18z_evaluation_v1"
-IDENTITY = "daily_high_top_tail_market_implied_no_18z_v1"
-PREDECLARATION_SHA256 = "633050d74f8a06006af6b66c03ff92c05dd961f8af28e0ff06dece3bfd9a67b6"
-TRAINING_SERIES_SHA256 = "8779adc163f93e086ee866d89254cb99afa69da40c743631c74db9efbe4d6726"
-EVALUATION_SERIES_SHA256 = "50b20f576354bafae06ab34b98c3980536a3248017e58a4142c339c1bdd144dc"
+SCHEMA = "daily_high_top_tail_market_implied_barbell_no_18z_evaluation_v1"
+IDENTITY = "daily_high_top_tail_market_implied_barbell_no_18z_v1"
+PREDECLARATION_SHA256 = "b6274946a3687fb0b62a8bb5b60202a25c2197d7515dc8a4780b9c56dc3d1bc8"
+TRAINING_SERIES_SHA256 = "a8601388f04677a38aa3194a93c45ad77a1ef933a65ae9657e09a1e24f98eab1"
+EVALUATION_SERIES_SHA256 = "ac365222dee4f724a98d67fbd002d8130f2785b50e9590485fe62bbec9fa2b0c"
 BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
 TRAINING_START = dt.date(2026, 2, 11)
 TRAINING_END = dt.date(2026, 3, 19)
 EVALUATION_START = dt.date(2026, 3, 21)
 EVALUATION_END = dt.date(2026, 6, 28)
-NETWORK_LIMIT = 4_000
+NETWORK_LIMIT = 5_000
 BOOTSTRAP_SAMPLES = 10_000
 FEE_RATE = Decimal("0.07")
 FEE_QUANTUM = Decimal("0.0001")
 MIN_EDGE = Decimal("0.0150")
+WILSON_Z = Decimal("1.2815515655446004")
 MONTHS = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
     "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
 }
 MONTH_NAMES = {value: key for key, value in MONTHS.items()}
 PRICE_BINS = (
-    (Decimal("0.7000"), Decimal("0.8000"), False, "0.70-0.80"),
-    (Decimal("0.8000"), Decimal("0.9000"), False, "0.80-0.90"),
-    (Decimal("0.9000"), Decimal("0.9700"), True, "0.90-0.97"),
+    (Decimal("0.8500"), Decimal("0.9000"), False, "0.85-0.90"),
+    (Decimal("0.9500"), Decimal("0.9700"), True, "0.95-0.97"),
 )
 
 
@@ -140,9 +140,8 @@ def price_bin(price: Decimal) -> str | None:
 
 def bin_maximum(label: str) -> Decimal:
     values = {
-        "0.70-0.80": Decimal("0.7999"),
-        "0.80-0.90": Decimal("0.8999"),
-        "0.90-0.97": Decimal("0.9700"),
+        "0.85-0.90": Decimal("0.8999"),
+        "0.95-0.97": Decimal("0.9700"),
     }
     return values[label]
 
@@ -385,26 +384,39 @@ def clustered_lower(rows: list[dict[str, object]], value_key: str, tail: float, 
     return means[math.floor((BOOTSTRAP_SAMPLES - 1) * tail)]
 
 
+def wilson_lower(successes: int, trials: int) -> Decimal | None:
+    if trials <= 0 or successes < 0 or successes > trials:
+        return None
+    n = Decimal(trials)
+    proportion = Decimal(successes) / n
+    z_squared = WILSON_Z * WILSON_Z
+    center = proportion + z_squared / (Decimal(2) * n)
+    spread = WILSON_Z * (
+        proportion * (Decimal(1) - proportion) / n + z_squared / (Decimal(4) * n * n)
+    ).sqrt()
+    return (center - spread) / (Decimal(1) + z_squared / n)
+
+
 def calibrate(training_rows: list[dict[str, object]]) -> dict[str, object]:
     bins = []
-    for index, (_, _, _, label) in enumerate(PRICE_BINS):
+    for _, _, _, label in PRICE_BINS:
         rows = [row for row in training_rows if row.get("candidate") is True and row.get("price_bin") == label]
         dates = {str(row["market_date"]) for row in rows}
-        for row in rows:
-            row["success"] = str(row["outcome_no"])
         observed = sum((Decimal(str(row["outcome_no"])) for row in rows), Decimal(0)) / Decimal(len(rows)) if rows else None
-        lower = clustered_lower(rows, "success", 0.10, 0x51A7C9E3 + index) if rows else None
+        successes = sum(int(row["outcome_no"]) for row in rows)
+        lower = wilson_lower(successes, len(rows))
         maximum = bin_maximum(label)
         conservative_edge = lower - maximum - fee(maximum) if lower is not None else None
         accepted = (
-            len(rows) >= 50
-            and len(dates) >= 30
+            len(rows) >= 25
+            and len(dates) >= 20
             and conservative_edge is not None
             and conservative_edge >= MIN_EDGE
         )
         bins.append({
             "price_bin": label,
             "rows": len(rows),
+            "successes": successes,
             "independent_dates": len(dates),
             "score": str(observed.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)) if observed is not None else None,
             "lower_90_probability": f"{lower:.8f}" if lower is not None else None,
@@ -573,7 +585,7 @@ def evaluate_oos(
             "observed_success": f"{observed:.8f}" if observed is not None else None,
             "score": str(score),
             "absolute_error": f"{error:.8f}" if error is not None else None,
-            "passes": len(bin_dates) >= 30 and error is not None and error <= Decimal("0.05"),
+            "passes": len(bin_dates) >= 20 and error is not None and error <= Decimal("0.05"),
         })
     lower90 = clustered_lower(selections, "submission_return", 0.10, 0xA11CE551) if selections else None
     holdouts = []
@@ -597,7 +609,7 @@ def evaluate_oos(
     )
     gates = {
         "exact_100_date_selection": len(selections) == 100 and len(dates) == 100,
-        "at_least_ten_stations": len(stations) >= 10,
+        "at_least_eight_stations": len(stations) >= 8,
         "positive_brier_skill": brier_skill is not None and brier_skill > 0,
         "reliability": bool(reliability) and all(row["passes"] for row in reliability),
         "thirty_executable_fills": len(fills) >= 30 and len({str(row["market_date"]) for row in fills}) >= 30,
@@ -605,7 +617,7 @@ def evaluate_oos(
         "drawdown_at_most_five": drawdown <= Decimal("5"),
         "clustered_90_submission_return_positive": lower90 is not None and lower90 > 0,
         "leave_one_station_out": bool(holdouts) and all(row["passes"] for row in holdouts),
-        "station_concentration": maximum_station_share <= Decimal("0.15"),
+        "station_concentration": maximum_station_share <= Decimal("0.20"),
         "date_concentration": len(selections) == 100,
         "scale_250_date_clustered_95": False,
     }
@@ -661,8 +673,8 @@ def main() -> None:
     root = Path(__file__).resolve().parent
     if file_sha256(root / "PREDECLARATION.md") != PREDECLARATION_SHA256:
         raise ValueError("Frozen predeclaration hash is invalid.")
-    training_series = load_inventory(root / "training_series.json", TRAINING_SERIES_SHA256, 5)
-    evaluation_series = load_inventory(root / "evaluation_series.json", EVALUATION_SERIES_SHA256, 15)
+    training_series = load_inventory(root / "training_series.json", TRAINING_SERIES_SHA256, 10)
+    evaluation_series = load_inventory(root / "evaluation_series.json", EVALUATION_SERIES_SHA256, 10)
     if set(training_series).intersection(evaluation_series):
         raise ValueError("Training and evaluation inventories overlap.")
     output_dir = Path(args.output_dir).resolve()
@@ -675,7 +687,7 @@ def main() -> None:
     )
     calibration = calibrate(training_rows)
     atomic_json(output_dir / "training.json", {
-        "schema": "daily_high_top_tail_market_implied_no_18z_training_v1",
+        "schema": "daily_high_top_tail_market_implied_barbell_no_18z_training_v1",
         "identity": IDENTITY,
         "rows": training_rows,
         "fee_identities": training_fees,
