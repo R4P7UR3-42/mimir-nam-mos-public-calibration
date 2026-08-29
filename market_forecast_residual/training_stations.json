@@ -1,0 +1,12 @@
+[
+  {"station_id":"KATL","series_ticker":"KXHIGHTATL","latitude":33.64,"longitude":-84.427,"time_zone":"America/New_York"},
+  {"station_id":"KDFW","series_ticker":"KXHIGHTDAL","latitude":32.899,"longitude":-97.04,"time_zone":"America/Chicago"},
+  {"station_id":"KNYC","series_ticker":"KXHIGHNY","latitude":40.783,"longitude":-73.967,"time_zone":"America/New_York"},
+  {"station_id":"KBOS","series_ticker":"KXHIGHTBOS","latitude":42.365,"longitude":-71.009,"time_zone":"America/New_York"},
+  {"station_id":"KAUS","series_ticker":"KXHIGHAUS","latitude":30.194,"longitude":-97.67,"time_zone":"America/Chicago"},
+  {"station_id":"KOKC","series_ticker":"KXHIGHTOKC","latitude":35.393,"longitude":-97.601,"time_zone":"America/Chicago"},
+  {"station_id":"KHOU","series_ticker":"KXHIGHTHOU","latitude":29.646,"longitude":-95.279,"time_zone":"America/Chicago"},
+  {"station_id":"KSAT","series_ticker":"KXHIGHTSATX","latitude":29.533,"longitude":-98.469,"time_zone":"America/Chicago"},
+  {"station_id":"KMSP","series_ticker":"KXHIGHTMIN","latitude":44.884,"longitude":-93.222,"time_zone":"America/Chicago"},
+  {"station_id":"KPHX","series_ticker":"KXHIGHTPHX","latitude":33.435,"longitude":-112.011,"time_zone":"America/Phoenix"}
+]

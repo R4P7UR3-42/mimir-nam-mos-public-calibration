@@ -1,0 +1,66 @@
+name: Isolated market plus ECMWF residual development
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-market-ecmwf-residual-development-v1
+  cancel-in-progress: false
+
+jobs:
+  development:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Verify frozen development identity and tests
+        working-directory: market_forecast_residual
+        run: |
+          test "$(sha256sum DEVELOPMENT.md | cut -d' ' -f1)" = f7f04d1b85e7cf00b8d8eeb0f5a3e589e9fb60fc36bfd84d369b30b7aafe0940
+          test "$(sha256sum training_stations.json | cut -d' ' -f1)" = c0a6c863e94a8255dcf63cc3ea07eb7576ace7207f318372907abbf780b2f7b7
+          python3 -m unittest -v
+      - name: Initialize immutable run manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-market-forecast-residual
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"market_forecast_residual_development_runner_v1",run_id:$run_id,head_sha:$head_sha,identity:"daily_high_top_tail_market_ecmwf_residual_18z_development_v1",training_only:true,evaluation_series_accessed:false,research_only:true,active_trading_capability_changed:false,production_database_accessed:false}' \
+            > "$root/run.json"
+      - name: Run one frozen training-only development capture
+        id: development
+        continue-on-error: true
+        run: |
+          timeout --signal=TERM --kill-after=30s 40m \
+            python3 market_forecast_residual/develop.py \
+              --output-dir /tmp/mimir-market-forecast-residual/evidence \
+              --max-requests 5000
+          jq '{schema,identity,network_requests,captured_rows,eligible_rows,eligible_dates,eligible_stations,models:(.models|map(del(.station_holdout_fits))),selected_model:(.selected_model|if . then del(.station_holdout_fits) else . end),successor_freeze_permitted}' \
+            /tmp/mimir-market-forecast-residual/evidence/development.json
+      - name: Write portable checksums
+        if: always()
+        run: |
+          root=/tmp/mimir-market-forecast-residual
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: market-forecast-residual-development-${{ github.run_id }}
+          path: /tmp/mimir-market-forecast-residual
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal source or runner failure
+        if: always() && steps.development.outcome != 'success'
+        run: exit 1
