@@ -7,3 +7,6 @@ decision gates are frozen in [`PREDECLARATION.md`](PREDECLARATION.md) before any
 Nothing in this repository can access Mimir production data, exchange credentials, capital settings, recommendations,
 or order APIs. A passing result would justify only a separate reviewed current-market support and implementation
 decision.
+
+The one-shot run terminated on a frozen source-schema gate before outcomes were acquired. See
+[`RESULT.md`](RESULT.md) for the checksum-bound rejection and no-retry decision.
