@@ -1,0 +1,74 @@
+name: Isolated public GEFSv12 dispersion canary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-public-gefs-dispersion-canary-v1
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: gefs_dispersion/requirements.txt
+      - name: Verify frozen pre-value identity and structural tests
+        working-directory: gefs_dispersion
+        run: |
+          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = 7bc055938dcb0332e94dd6486f5249be2fa6eef632cf2d5ee44524274036f9d0
+          test "$(sha256sum requirements.txt | cut -d' ' -f1)" = 140a23952a22d9809dc837f750aec73f9c4225f5e0d26b04ea9c679bc3060db9
+          test "$(sha256sum canary.py | cut -d' ' -f1)" = 37ed987ac27a7f190e7b30a10ebae9d0f87ef089c494f7ff4f4b487c2fde1c3d
+          test "$(sha256sum ../stations.json | cut -d' ' -f1)" = 297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12
+          python3 -m py_compile canary.py test_canary.py test_workflow.py
+          python3 -m unittest -v
+      - name: Install pinned ecCodes decoder
+        run: python3 -m pip install --disable-pip-version-check -r gefs_dispersion/requirements.txt
+      - name: Verify decoder without inherited dynamic-loader authority
+        run: env -u LD_LIBRARY_PATH python3 -c 'import eccodes; assert eccodes.codes_get_api_version() == "2.48.0"'
+      - name: Initialize immutable public canary manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-gefs-dispersion-canary-v1
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"noaa_gefs_v12_public_canary_run_v1",run_id:$run_id,head_sha:$head_sha,identity:"noaa_gefs_v12_five_member_station_z_wilson95_rolling120_lag2_v1",predeclaration_sha256:"7bc055938dcb0332e94dd6486f5249be2fa6eef632cf2d5ee44524274036f9d0",research_only:true,active_trading_capability_changed:false,production_database_accessed:false}' \
+            > "$root/run.json"
+      - name: Execute exact three-request source canary
+        id: canary
+        continue-on-error: true
+        run: |
+          env -u LD_LIBRARY_PATH python3 gefs_dispersion/canary.py \
+            --output-dir /tmp/mimir-gefs-dispersion-canary-v1/evidence \
+            --max-requests 3
+          jq '{schema,source,steps:(.decoder.messages|map(.step)),research_only,active_trading_capability_changed,production_database_accessed}' \
+            /tmp/mimir-gefs-dispersion-canary-v1/evidence/canary.json
+      - name: Seal portable source evidence
+        if: always()
+        run: |
+          root=/tmp/mimir-gefs-dispersion-canary-v1
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public canary artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: noaa-gefs-dispersion-canary-v1-${{ github.run_id }}
+          path: /tmp/mimir-gefs-dispersion-canary-v1
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal source or decoder failure
+        if: always() && steps.canary.outcome != 'success'
+        run: exit 1
