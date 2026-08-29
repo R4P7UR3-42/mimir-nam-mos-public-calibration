@@ -33,7 +33,7 @@ jobs:
         run: |
           test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = 7bc055938dcb0332e94dd6486f5249be2fa6eef632cf2d5ee44524274036f9d0
           test "$(sha256sum requirements.txt | cut -d' ' -f1)" = 140a23952a22d9809dc837f750aec73f9c4225f5e0d26b04ea9c679bc3060db9
-          test "$(sha256sum capture.py | cut -d' ' -f1)" = bda70eaa64e721e2601b9fb8798d89f7f4894b10263d58b79263ca2f7f01ca64
+          test "$(sha256sum capture.py | cut -d' ' -f1)" = 2eb0d27720a04e35dad0e33ca56b529f5947755d0f5dbdcaa698ff43db4ef4e3
           test "$(sha256sum evaluate.py | cut -d' ' -f1)" = 3419c34cc9bd58f8329fcab17237638b4ec09d92d076139db67770c976596b57
           test "$(sha256sum ../stations.json | cut -d' ' -f1)" = 297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12
           python3 -m py_compile canary.py capture.py evaluate.py test_canary.py test_capture.py test_evaluate.py test_workflow.py
