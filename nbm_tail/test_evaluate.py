@@ -82,6 +82,24 @@ class NbmTailTest(unittest.TestCase):
         ]
         self.assertEqual(evaluate.select_rows(rows)[0]["market_ticker"], "A")
 
+    def test_two_tails_receive_distinct_artifact_station_identities(self) -> None:
+        seen = []
+
+        def capture(_client, station_row, market, clock):
+            seen.append((station_row["station_id"], market["ticker"], clock["id"]))
+            return {**station_row, "market_ticker": market["ticker"]}
+
+        station = {"station_id": "KATL"}
+        with mock.patch.object(evaluate.time_model, "capture_at", side_effect=capture):
+            first = evaluate.capture_tail(object(), station, {"ticker": "UPPER"})
+            second = evaluate.capture_tail(object(), station, {"ticker": "LOWER"})
+        self.assertEqual(first["station_id"], "KATL")
+        self.assertEqual(second["station_id"], "KATL")
+        self.assertEqual(
+            seen,
+            [("KATL-UPPER", "UPPER", "prior_1430z"), ("KATL-LOWER", "LOWER", "prior_1430z")],
+        )
+
     def test_variable_score_evaluation_passes_synthetic_boundary(self) -> None:
         rows = []
         for index in range(40):

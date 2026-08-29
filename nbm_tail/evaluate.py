@@ -23,9 +23,9 @@ SPEC.loader.exec_module(q75)
 time_model = q75.time_model
 price = q75.price
 
-SCHEMA = "noaa_nbm_v5_station_robust_offered_tail_no_split_evaluation_v1"
-IDENTITY = "noaa_nbm_v5_station_robust_offered_tail_no_split_development_v1"
-PREDECLARATION_SHA256 = "ad899bf72d0951d1b31cdbd1e7d5a640e4b371f9a43f1aa6f5c81cb18d76e19e"
+SCHEMA = "noaa_nbm_v5_station_robust_offered_tail_no_split_evaluation_v2"
+IDENTITY = "noaa_nbm_v5_station_robust_offered_tail_no_split_development_v2"
+PREDECLARATION_SHA256 = "1849bc210ec4c3a90a47c1e6605683e72d712730bbb91cdc5202de3e4135909f"
 TRAINING_START = q75.TRAINING_START
 TRAINING_END = q75.TRAINING_END
 HELD_OUT_START = q75.HELD_OUT_START
@@ -218,6 +218,22 @@ def apply_score(row: dict[str, object], score: Decimal) -> dict[str, object]:
     }
 
 
+def capture_tail(
+    client: price.PublicClient,
+    station_row: dict[str, object],
+    market: dict[str, object],
+) -> dict[str, object]:
+    """Give each offered tail an exact create-once identity without changing its station DTO."""
+    artifact_station = f"{station_row['station_id']}-{market['ticker']}"
+    captured = time_model.capture_at(
+        client,
+        {**station_row, "station_id": artifact_station},
+        market,
+        DECISION_CLOCK,
+    )
+    return {**captured, "station_id": station_row["station_id"]}
+
+
 def select_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     by_date: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in rows:
@@ -326,7 +342,7 @@ def evaluate_selections(rows: list[dict[str, object]]) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     price.assert_not_production_host()
-    if price.file_sha256(ROOT / "PREDECLARATION.md") != PREDECLARATION_SHA256:
+    if price.file_sha256(ROOT / "PREDECLARATION_V2.md") != PREDECLARATION_SHA256:
         raise ValueError("Frozen tail predeclaration hash is invalid.")
     rows, stations = load_model_rows()
     training = training_rows(rows)
@@ -379,7 +395,7 @@ def main() -> None:
             quote_rows.append({**base, "candidate": False, "reason": score_row["reason"]})
             continue
         qualified_tail_rows += 1
-        captured = time_model.capture_at(client, station_row, market, DECISION_CLOCK)
+        captured = capture_tail(client, station_row, market)
         quote_rows.append(apply_score({**captured, **structure}, Decimal(str(score_row["score"]))))
         print(json.dumps({
             "station_id": station_row["station_id"],
