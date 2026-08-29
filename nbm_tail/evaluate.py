@@ -23,9 +23,9 @@ SPEC.loader.exec_module(q75)
 time_model = q75.time_model
 price = q75.price
 
-SCHEMA = "noaa_nbm_v5_station_robust_offered_tail_no_split_evaluation_v2"
-IDENTITY = "noaa_nbm_v5_station_robust_offered_tail_no_split_development_v2"
-PREDECLARATION_SHA256 = "1849bc210ec4c3a90a47c1e6605683e72d712730bbb91cdc5202de3e4135909f"
+SCHEMA = "noaa_nbm_v5_station_robust_offered_tail_no_split_evaluation_v3"
+IDENTITY = "noaa_nbm_v5_station_robust_offered_tail_no_split_development_v3"
+PREDECLARATION_SHA256 = "87e8774db2ecd10a60eaa54dd086a89df2aaffc81e92a3697bfd8cc731aa7a21"
 TRAINING_START = q75.TRAINING_START
 TRAINING_END = q75.TRAINING_END
 HELD_OUT_START = q75.HELD_OUT_START
@@ -36,6 +36,7 @@ MIN_PRICE = Decimal("0.55")
 MAX_PRICE = Decimal("0.97")
 MIN_EDGE = Decimal("0.0150")
 DECISION_CLOCK = time_model.CLOCKS[0]
+EXPECTED_OUTCOME_CONFLICT = "KMIA|2026-07-07|KXHIGHMIA-26JUL07-T88|less|88|0|no"
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,6 +86,9 @@ def training_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
                 price.decimal_value(row["observed_high_f"], "observed high")
                 - price.decimal_value(row["q50_f"], "Q50")
             )
+            observed = price.decimal_value(row["observed_high_f"], "observed high")
+            if observed < Decimal("-50") or observed > Decimal("140"):
+                raise ValueError("Training observed high is outside the frozen physical range.")
             if residual != residual.to_integral_value():
                 raise ValueError("Training residual is not an exact integer.")
             output.append({**row, "residual_f": str(residual)})
@@ -133,15 +137,36 @@ def tail_structure(station_row: dict[str, object], market: dict[str, object]) ->
     }
 
 
-def validate_tail_outcome(
+def provider_tail_outcome(
     station_row: dict[str, object], market: dict[str, object], structure: dict[str, object]
-) -> int:
+) -> tuple[int, dict[str, object] | None]:
     high = price.decimal_value(station_row["observed_high_f"], "observed high")
     boundary = price.decimal_value(structure["boundary_f"], "tail boundary")
-    outcome_no = high <= boundary if structure["strike_type"] == "greater" else high >= boundary
-    if market.get("result") not in ("yes", "no") or (market.get("result") == "no") != outcome_no:
-        raise ValueError(f"Tail settlement arithmetic is invalid for {market.get('ticker')}.")
-    return int(outcome_no)
+    if market.get("result") not in ("yes", "no"):
+        raise ValueError(f"Tail provider settlement is invalid for {market.get('ticker')}.")
+    provider_no = int(market.get("result") == "no")
+    nws_no = int(high <= boundary if structure["strike_type"] == "greater" else high >= boundary)
+    if provider_no == nws_no:
+        return provider_no, None
+    diagnostic = {
+        "station_id": station_row["station_id"],
+        "market_date": station_row["market_date"],
+        "market_ticker": market["ticker"],
+        "strike_type": structure["strike_type"],
+        "boundary_f": str(boundary),
+        "ncei_observed_high_f": str(high),
+        "provider_result": market["result"],
+    }
+    diagnostic["identity"] = "|".join((
+        str(diagnostic["station_id"]),
+        str(diagnostic["market_date"]),
+        str(diagnostic["market_ticker"]),
+        str(diagnostic["strike_type"]),
+        str(diagnostic["boundary_f"]),
+        str(diagnostic["ncei_observed_high_f"]),
+        str(diagnostic["provider_result"]),
+    ))
+    return provider_no, diagnostic
 
 
 def score_outcome(row: dict[str, object], strike_type: str, offset: Decimal) -> int:
@@ -342,7 +367,7 @@ def evaluate_selections(rows: list[dict[str, object]]) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     price.assert_not_production_host()
-    if price.file_sha256(ROOT / "PREDECLARATION_V2.md") != PREDECLARATION_SHA256:
+    if price.file_sha256(ROOT / "PREDECLARATION_V3.md") != PREDECLARATION_SHA256:
         raise ValueError("Frozen tail predeclaration hash is invalid.")
     rows, stations = load_model_rows()
     training = training_rows(rows)
@@ -377,10 +402,18 @@ def main() -> None:
             for market, structure in tails:
                 offered.append((station_row, market, structure))
     score_table = derive_score_table(training, [structure for _, _, structure in offered])
+    reconciled = []
+    outcome_conflicts = []
+    for station_row, market, structure in offered:
+        outcome_no, conflict = provider_tail_outcome(station_row, market, structure)
+        reconciled.append((station_row, market, structure, outcome_no))
+        if conflict is not None:
+            outcome_conflicts.append(conflict)
+    if [str(row["identity"]) for row in outcome_conflicts] != [EXPECTED_OUTCOME_CONFLICT]:
+        raise ValueError("Held-out provider/NCEI conflict set is not the exact frozen singleton.")
     quote_rows = []
     qualified_tail_rows = 0
-    for station_row, market, structure in offered:
-        outcome_no = validate_tail_outcome(station_row, market, structure)
+    for station_row, market, structure, outcome_no in reconciled:
         score_row = score_table[str(structure["score_key"])]
         base = {
             **station_row,
@@ -432,6 +465,8 @@ def main() -> None:
         "historical_cutoffs": cutoffs,
         "fee_identities": fee_identities,
         "score_table": score_table,
+        "outcome_source": "finalized_provider_market_result",
+        "outcome_conflicts": outcome_conflicts,
         "support_funnel": {
             "held_out_station_dates": sum(len(value) for value in held_out_by_station.values()),
             "missing_events": len(missing_events),

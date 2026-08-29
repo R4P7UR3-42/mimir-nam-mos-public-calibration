@@ -24,7 +24,7 @@ class NbmTailTest(unittest.TestCase):
         self.assertTrue(all(Decimal(row["q50_f"]) == Decimal(row["q50_f"]).to_integral_value() for row in rows))
 
     def test_tail_structure_and_outcome_arithmetic_are_exact(self) -> None:
-        row = {"q50_f": "75", "observed_high_f": "80"}
+        row = {"station_id": "KTEST", "market_date": "2026-07-01", "q50_f": "75", "observed_high_f": "80"}
         base = {
             "ticker": "TEST",
             "market_type": "binary",
@@ -37,15 +37,26 @@ class NbmTailTest(unittest.TestCase):
                    "yes_sub_title": "82° or above", "result": "no"}
         structure = evaluate.tail_structure(row, greater)
         self.assertEqual(structure["score_key"], "greater:6")
-        self.assertEqual(evaluate.validate_tail_outcome(row, greater, structure), 1)
+        self.assertEqual(evaluate.provider_tail_outcome(row, greater, structure), (1, None))
         less = {**base, "strike_type": "less", "floor_strike": None, "cap_strike": "74",
                 "yes_sub_title": "73° or below", "result": "no"}
         structure = evaluate.tail_structure(row, less)
         self.assertEqual(structure["score_key"], "less:-1")
-        self.assertEqual(evaluate.validate_tail_outcome(row, less, structure), 1)
+        self.assertEqual(evaluate.provider_tail_outcome(row, less, structure), (1, None))
         self.assertIsNone(evaluate.tail_structure(row, {**base, "strike_type": "between"}))
-        with self.assertRaisesRegex(ValueError, "settlement arithmetic"):
-            evaluate.validate_tail_outcome(row, {**greater, "result": "yes"}, evaluate.tail_structure(row, greater))
+        provider_no, conflict = evaluate.provider_tail_outcome(
+            row, {**greater, "result": "yes"}, evaluate.tail_structure(row, greater),
+        )
+        self.assertEqual(provider_no, 0)
+        self.assertEqual(conflict["provider_result"], "yes")
+
+    def test_exact_known_ncei_conflict_identity_is_frozen(self) -> None:
+        row = {"station_id": "KMIA", "market_date": "2026-07-07", "observed_high_f": "0"}
+        market = {"ticker": "KXHIGHMIA-26JUL07-T88", "result": "no"}
+        structure = {"strike_type": "less", "boundary_f": "88"}
+        provider_no, conflict = evaluate.provider_tail_outcome(row, market, structure)
+        self.assertEqual(provider_no, 1)
+        self.assertEqual(conflict["identity"], evaluate.EXPECTED_OUTCOME_CONFLICT)
 
     def test_score_table_prescreens_and_uses_worst_robust_floor(self) -> None:
         rows = []
