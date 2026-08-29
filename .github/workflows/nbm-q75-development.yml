@@ -1,0 +1,71 @@
+name: Isolated public NOAA NBM Q75 development
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-public-noaa-nbm-q75-v1
+  cancel-in-progress: false
+
+jobs:
+  evaluation:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Verify frozen Q75 identity, inputs, and tests
+        working-directory: nbm_q75
+        run: |
+          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = 564b72e864570eb6a4d857e42d3c9630666c2b798521fc835aa6d212f4a26e4c
+          test "$(sha256sum ../nbm_q90_price/station_series.json | cut -d' ' -f1)" = 98a46e35e06c485cfcaa2b2632a2559b90cb5012491f718f5a570d13a26cdbbd
+          test "$(sha256sum ../nbm_qmd/inputs/33155927949.json | cut -d' ' -f1)" = 658b4c8d9a0c4361bb2e91efb1d44eda2d82f37112fcc4f176078811e3501430
+          test "$(sha256sum ../nbm_qmd/inputs/33156510785.json | cut -d' ' -f1)" = a759de0e02a095ee38d26b452aa4a922ec09162d1e90552d1b9fafd7147d7f45
+          test "$(sha256sum ../nbm_qmd/inputs/33156512445.json | cut -d' ' -f1)" = dceddb96a28c1899f1f6051bc074749b675bb1cf9c4900488994acb2a4d617cd
+          test "$(sha256sum ../nbm_qmd/inputs/33156598208.json | cut -d' ' -f1)" = 1d5110c2b94be884c70e254866415176109e3b6a26c95592b42cb8df45f22992
+          python3 -m py_compile evaluate.py test_evaluate.py test_workflow.py
+          python3 -m unittest -v
+      - name: Initialize immutable public Q75 run manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-nbm-q75-public-v1
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"noaa_nbm_q75_public_run_v1",run_id:$run_id,head_sha:$head_sha,identity:"noaa_nbm_v5_q75_station_robust_midnight_split_development_v1",predeclaration_sha256:"564b72e864570eb6a4d857e42d3c9630666c2b798521fc835aa6d212f4a26e4c",research_only:true,active_trading_capability_changed:false,production_database_accessed:false,independent_oos_evidence:false}' \
+            > "$root/run.json"
+      - name: Run the single frozen Q75 development audit
+        id: evaluation
+        continue-on-error: true
+        run: |
+          timeout --signal=TERM --kill-after=30s 30m \
+            python3 nbm_q75/evaluate.py \
+              --output-dir /tmp/mimir-nbm-q75-public-v1/evidence \
+              --max-requests 3000
+          jq '{schema,identity,training,held_out_window,price_policy,network_policy,support_funnel,evaluation:(.evaluation|del(.selections)),research_only,active_trading_capability_changed,production_database_accessed,independent_oos_evidence,capital_risk_authority,production_activation}' \
+            /tmp/mimir-nbm-q75-public-v1/evidence/report.json
+      - name: Seal immutable public Q75 evidence
+        if: always()
+        run: |
+          root=/tmp/mimir-nbm-q75-public-v1
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public Q75 artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: noaa-nbm-q75-development-v1-${{ github.run_id }}
+          path: /tmp/mimir-nbm-q75-public-v1
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal Q75 source or runner failure
+        if: always() && steps.evaluation.outcome != 'success'
+        run: exit 1
