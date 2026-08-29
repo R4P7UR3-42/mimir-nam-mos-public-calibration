@@ -36,6 +36,7 @@ def exact_market(**overrides):
         "floor_strike": 81,
         "cap_strike": None,
         "result": "no",
+        "status": "finalized",
         "yes_sub_title": "82° or above",
         "is_provisional": False,
         "mve_collection_ticker": None,
@@ -118,6 +119,39 @@ class NbmQ90PriceEvaluationTest(unittest.TestCase):
                     evaluate.exact_q90_market(station_row(), [exact_market(**changed)])
         with self.assertRaisesRegex(ValueError, "ambiguous"):
             evaluate.exact_q90_market(station_row(), [exact_market(), exact_market(ticker="duplicate")])
+
+    def test_moving_partitions_ignore_only_pre_window_aliases(self) -> None:
+        current = exact_market(
+            ticker="KXHIGHAUS-26MAY08-T81",
+            event_ticker="KXHIGHAUS-26MAY08",
+        )
+        legacy = exact_market(
+            ticker="HIGHAUS-24OCT23-T81",
+            event_ticker="HIGHAUS-24OCT23",
+        )
+        result = evaluate.discover_markets(QueueClient([
+            {"markets": [current], "cursor": ""},
+            {"markets": [current.copy(), legacy], "cursor": ""},
+        ]), "KXHIGHAUS")
+        self.assertEqual([row["ticker"] for row in result[dt.date(2026, 5, 8)]], [current["ticker"]])
+
+        in_window_alias = {
+            **legacy,
+            "ticker": "HIGHAUS-26MAY08-T81",
+            "event_ticker": "HIGHAUS-26MAY08",
+        }
+        with self.assertRaisesRegex(ValueError, "In-window historical market identity drifted"):
+            evaluate.discover_markets(QueueClient([
+                {"markets": [], "cursor": ""},
+                {"markets": [in_window_alias], "cursor": ""},
+            ]), "KXHIGHAUS")
+
+    def test_partition_pagination_rejects_repeated_cursor(self) -> None:
+        with self.assertRaisesRegex(ValueError, "repeated a cursor"):
+            evaluate.market_pages(QueueClient([
+                {"markets": [], "cursor": "same"},
+                {"markets": [], "cursor": "same"},
+            ]), "KXHIGHAUS", "historical")
 
     def test_quote_uses_only_exact_1430_yes_bid(self) -> None:
         clock = int(evaluate.decision_clock(dt.date(2026, 5, 8)).timestamp())

@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -19,11 +20,11 @@ from pathlib import Path
 
 
 getcontext().prec = 40
-SCHEMA = "noaa_nbm_v5_q90_exact_threshold_no_development_evaluation_v1"
-IDENTITY = "noaa_nbm_v5_q90_exact_threshold_no_development_v1"
+SCHEMA = "noaa_nbm_v5_q90_exact_threshold_no_development_evaluation_v2"
+IDENTITY = "noaa_nbm_v5_q90_exact_threshold_no_development_v2"
 CAPTURE_SCHEMA = "noaa_nbm_v5_qmd_max_t_capture_v1"
 MODEL = "noaa_nbm_v5_qmd_station_max_t_percentiles_v1"
-PREDECLARATION_SHA256 = "c5d22e2603fbab0fcf13117f563a631522ffda970b5c8f9261d0d8ec22054f3e"
+PREDECLARATION_SHA256 = "9f9081b5a986183955e7d8335ce8e31b94cbfcc3c496ae8476bc0cc5209f192b"
 STATION_SERIES_SHA256 = "98a46e35e06c485cfcaa2b2632a2559b90cb5012491f718f5a570d13a26cdbbd"
 INPUT_SHA256 = {
     "33155927949.json": "658b4c8d9a0c4361bb2e91efb1d44eda2d82f37112fcc4f176078811e3501430",
@@ -37,6 +38,8 @@ DEVELOPMENT_START = dt.date(2026, 5, 8)
 DEVELOPMENT_END = dt.date(2026, 8, 14)
 EXPECTED_PARENT_DATES = 100
 EXPECTED_DEVELOPMENT_DATES = 99
+LIVE_CLOSE_START = 1_778_198_400  # 2026-05-08T00:00:00Z
+LIVE_CLOSE_END_EXCLUSIVE = 1_786_838_400  # 2026-08-16T00:00:00Z
 NETWORK_LIMIT = 3_000
 BOOTSTRAP_SAMPLES = 10_000
 PROBABILITY = Decimal("0.933000")
@@ -140,6 +143,19 @@ def event_market_date(event_ticker: object, series_ticker: str) -> dt.date:
         raise ValueError(f"Event date is malformed for {event_ticker}.") from error
 
 
+def event_market_date_suffix(event_ticker: object) -> dt.date:
+    """Parse a provider-returned event date before applying the in-window identity gate."""
+    if not isinstance(event_ticker, str):
+        raise ValueError("Historical event date identity is missing.")
+    match = re.search(r"(?:^|-)(\d{2})([A-Z]{3})(\d{1,2})$", event_ticker)
+    if match is None or match.group(2) not in MONTHS:
+        raise ValueError(f"Historical event date identity is invalid for {event_ticker}.")
+    try:
+        return dt.date(2000 + int(match.group(1)), MONTHS[match.group(2)], int(match.group(3)))
+    except ValueError as error:
+        raise ValueError(f"Historical event date is malformed for {event_ticker}.") from error
+
+
 def assert_not_production_host() -> None:
     try:
         with urllib.request.urlopen("http://127.0.0.1:8787/api/status", timeout=1) as response:
@@ -234,42 +250,116 @@ def validate_fee_identity(client: PublicClient, series_ticker: str) -> dict[str,
     }
 
 
-def discover_markets(client: PublicClient, series_ticker: str) -> dict[dt.date, list[dict[str, object]]]:
+def market_pages(
+    client: PublicClient, series_ticker: str, partition: str
+) -> list[dict[str, object]]:
+    if partition not in ("live", "historical"):
+        raise ValueError("Market partition is invalid.")
     markets: list[dict[str, object]] = []
     cursor = ""
+    seen_cursors: set[str] = set()
     for page in range(1, 11):
-        query = {"limit": "1000", "series_ticker": series_ticker}
+        if partition == "live":
+            path = "markets"
+            query = {
+                "series_ticker": series_ticker,
+                "min_close_ts": str(LIVE_CLOSE_START),
+                "max_close_ts": str(LIVE_CLOSE_END_EXCLUSIVE),
+                "limit": "1000",
+                "mve_filter": "exclude",
+            }
+        else:
+            path = "historical/markets"
+            query = {"limit": "1000", "series_ticker": series_ticker}
         if cursor:
             query["cursor"] = cursor
-        url = f"{BASE_URL}/historical/markets?{urllib.parse.urlencode(query)}"
-        payload = client.fetch(url, f"{series_ticker}-markets-{page}")
+        url = f"{BASE_URL}/{path}?{urllib.parse.urlencode(query)}"
+        payload = client.fetch(url, f"{series_ticker}-{partition}-markets-{page}")
         page_markets = payload.get("markets")
         next_cursor = payload.get("cursor")
         if not isinstance(page_markets, list) or any(not isinstance(row, dict) for row in page_markets):
-            raise ValueError(f"Historical market page is malformed for {series_ticker}.")
+            raise ValueError(f"{partition} market page is malformed for {series_ticker}.")
         if not isinstance(next_cursor, str):
-            raise ValueError(f"Historical market cursor is malformed for {series_ticker}.")
+            raise ValueError(f"{partition} market cursor is malformed for {series_ticker}.")
         markets.extend(page_markets)
         cursor = next_cursor
         if not cursor:
             break
+        if cursor in seen_cursors:
+            raise ValueError(f"{partition} market pagination repeated a cursor for {series_ticker}.")
+        seen_cursors.add(cursor)
     if cursor:
-        raise ValueError(f"Historical market pagination exceeded ten pages for {series_ticker}.")
+        raise ValueError(f"{partition} market pagination exceeded ten pages for {series_ticker}.")
+    return markets
+
+
+def market_partition_identity(market: dict[str, object]) -> dict[str, object]:
+    return {
+        "event_ticker": market.get("event_ticker"),
+        "market_type": market.get("market_type"),
+        "strike_type": market.get("strike_type"),
+        "floor_strike": (
+            str(decimal_value(market["floor_strike"], "floor strike"))
+            if market.get("floor_strike") is not None else None
+        ),
+        "cap_strike": (
+            str(decimal_value(market["cap_strike"], "cap strike"))
+            if market.get("cap_strike") is not None else None
+        ),
+        "result": market.get("result"),
+        "yes_sub_title": market.get("yes_sub_title"),
+        "status": market.get("status"),
+        "is_provisional": market.get("is_provisional"),
+        "mve_collection_ticker": market.get("mve_collection_ticker"),
+        "fee_waiver_expiration_time": market.get("fee_waiver_expiration_time"),
+    }
+
+
+def discover_markets(client: PublicClient, series_ticker: str) -> dict[dt.date, list[dict[str, object]]]:
+    merged: dict[str, tuple[str, dict[str, object]]] = {}
+    for partition in ("live", "historical"):
+        seen_partition_tickers: set[str] = set()
+        for market in market_pages(client, series_ticker, partition):
+            market_date = event_market_date_suffix(market.get("event_ticker"))
+            if market_date < DEVELOPMENT_START or market_date > DEVELOPMENT_END:
+                continue
+            ticker = market.get("ticker")
+            if (
+                not isinstance(ticker, str)
+                or not ticker.startswith(f"{series_ticker}-")
+                or not isinstance(market.get("event_ticker"), str)
+                or not str(market["event_ticker"]).startswith(f"{series_ticker}-")
+                or event_market_date(market["event_ticker"], series_ticker) != market_date
+            ):
+                raise ValueError(f"In-window {partition} market identity drifted for {series_ticker}.")
+            if ticker in seen_partition_tickers:
+                raise ValueError(f"In-window {partition} market is duplicated for {ticker}.")
+            seen_partition_tickers.add(ticker)
+            prior = merged.get(ticker)
+            if prior is not None and market_partition_identity(prior[1]) != market_partition_identity(market):
+                raise ValueError(f"Market identity conflicts across partitions for {ticker}.")
+            if prior is None or partition == "historical":
+                merged[ticker] = (partition, market)
+
     by_date: dict[dt.date, list[dict[str, object]]] = defaultdict(list)
     event_by_date: dict[dt.date, str] = {}
-    for market in markets:
+    for _, market in merged.values():
         ticker = market.get("ticker")
-        if not isinstance(ticker, str) or not ticker.startswith(f"{series_ticker}-"):
-            raise ValueError(f"Historical market identity drifted for {series_ticker}.")
         market_date = event_market_date(market.get("event_ticker"), series_ticker)
-        if market_date < DEVELOPMENT_START or market_date > DEVELOPMENT_END:
-            continue
         event = str(market["event_ticker"])
         if market_date in event_by_date and event_by_date[market_date] != event:
             raise ValueError(f"Multiple event identities exist for {series_ticker}|{market_date}.")
         event_by_date[market_date] = event
         by_date[market_date].append(market)
     return by_date
+
+
+def historical_cutoff(client: PublicClient) -> str:
+    url = f"{BASE_URL}/historical/cutoff"
+    payload = client.fetch(url, "historical-cutoff")
+    value = payload.get("market_settled_ts")
+    parse_timestamp(value, "historical market cutoff")
+    return str(value)
 
 
 def exact_q90_market(
@@ -623,7 +713,7 @@ def main() -> None:
     args = parse_args()
     assert_not_production_host()
     root = Path(__file__).resolve().parent
-    if file_sha256(root / "PREDECLARATION.md") != PREDECLARATION_SHA256:
+    if file_sha256(root / "PREDECLARATION_V2.md") != PREDECLARATION_SHA256:
         raise ValueError("Frozen predeclaration hash is invalid.")
     station_rows, station_to_series = load_station_map(root / "station_series.json")
     parent_rows = load_parent_rows(root, station_to_series)
@@ -633,6 +723,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     client = PublicClient(output_dir, args.max_requests)
     fee_identities = [validate_fee_identity(client, row["series_ticker"]) for row in station_rows]
+    cutoff = historical_cutoff(client)
     rows_by_station: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in parent_rows:
         rows_by_station[str(row["station_id"])].append(row)
@@ -683,6 +774,14 @@ def main() -> None:
             "maximum_requests_per_second": 4,
             "no_retry": True,
             "stop_on_http_429": True,
+        },
+        "historical_market_cutoff": cutoff,
+        "market_partition_policy": {
+            "live_close_start": "2026-05-08T00:00:00Z",
+            "live_close_end_exclusive": "2026-08-16T00:00:00Z",
+            "live_and_historical_pages_per_series": 10,
+            "ignore_legacy_identity_only_outside_development_window": True,
+            "require_exact_current_identity_inside_development_window": True,
         },
         "fee_identities": fee_identities,
         "support_funnel": support_funnel,

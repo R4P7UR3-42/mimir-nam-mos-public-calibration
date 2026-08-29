@@ -7,11 +7,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 class WorkflowTest(unittest.TestCase):
     def test_workflow_is_public_order_free_single_attempt_and_terminal(self) -> None:
-        text = (ROOT / ".github/workflows/nbm-q90-price-development.yml").read_text(encoding="utf-8")
+        text = (ROOT / ".github/workflows/nbm-q90-price-development-v2.yml").read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", text)
         self.assertIn("github.run_attempt == 1", text)
         self.assertIn("runs-on: ubuntu-latest", text)
         self.assertIn("--max-requests 3000", text)
+        self.assertIn("noaa_nbm_v5_q90_exact_threshold_no_development_v2", text)
         self.assertIn("retention-days: 1", text)
         self.assertIn("active_trading_capability_changed:false", text)
         self.assertIn("production_database_accessed:false", text)
