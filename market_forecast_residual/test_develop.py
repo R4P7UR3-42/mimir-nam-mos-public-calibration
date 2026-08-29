@@ -1,17 +1,28 @@
 import datetime as dt
+import json
+import tempfile
 import unittest
+import urllib.error
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import develop
 
 
-class FakeClient:
+class FakeResponse:
     def __init__(self, payload):
-        self.payload = payload
-        self.urls = []
+        self.payload = json.dumps(payload).encode()
+        self.headers = {"content-type": "application/json"}
 
-    def fetch(self, url, _label):
-        self.urls.append(url)
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
         return self.payload
 
 
@@ -47,12 +58,13 @@ class DevelopmentTest(unittest.TestCase):
             "longitude": -84.427,
             "time_zone": "America/New_York",
         }
-        result = develop.fetch_forecast(FakeClient(payload), station, dt.date(2026, 2, 11))
+        url = "https://example.test/?run=2026-02-10T06%3A00"
+        result = develop.parse_forecast(payload, url, "test", station, dt.date(2026, 2, 11))
         self.assertEqual(result["forecast_local_hour_count"], 24)
         self.assertEqual(result["forecast_first_utc"], "2026-02-11T05:00Z")
         self.assertEqual(result["forecast_last_utc"], "2026-02-12T04:00Z")
         self.assertEqual(result["forecast_max_f"], "46")
-        self.assertIn("run=2026-02-10T06%3A00", result["forecast_source_url"])
+        self.assertEqual(result["forecast_source_url"], url)
 
     def test_ridge_logistic_fit_learns_positive_distance(self):
         rows = []
@@ -68,6 +80,29 @@ class DevelopmentTest(unittest.TestCase):
             distance_index = 2 if name == "market_free" else 1
             self.assertGreater(coefficients[distance_index], 0)
             self.assertLess(develop.predict(rows[0], name, coefficients), develop.predict(rows[-1], name, coefficients))
+
+    def test_transport_gets_one_retry_before_response(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = SimpleNamespace(used=0, maximum=5, last_started=0.0, output_dir=Path(temporary))
+            with (
+                mock.patch.object(develop.urllib.request, "urlopen", side_effect=[
+                    urllib.error.URLError("tls"), FakeResponse({"ok": True}),
+                ]) as opened,
+                mock.patch.object(develop.time, "sleep"),
+            ):
+                self.assertEqual(develop.fetch_payload(client, "https://example.test", "source"), {"ok": True})
+            self.assertEqual(opened.call_count, 2)
+            self.assertEqual(client.used, 2)
+            self.assertTrue((Path(temporary) / "raw" / "source.json").exists())
+
+    def test_http_429_is_never_retried(self):
+        client = SimpleNamespace(used=0, maximum=5, last_started=0.0, output_dir=Path("/unused"))
+        error = urllib.error.HTTPError("https://example.test", 429, "limited", {}, None)
+        with mock.patch.object(develop.urllib.request, "urlopen", side_effect=error) as opened:
+            with self.assertRaisesRegex(ValueError, "HTTP 429 without retry"):
+                develop.fetch_payload(client, "https://example.test", "source")
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(client.used, 1)
 
     def test_unknown_model_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "Unknown model"):

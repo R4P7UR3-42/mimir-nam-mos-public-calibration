@@ -23,7 +23,7 @@ jobs:
       - name: Verify frozen development identity and tests
         working-directory: market_forecast_residual
         run: |
-          test "$(sha256sum DEVELOPMENT.md | cut -d' ' -f1)" = f7f04d1b85e7cf00b8d8eeb0f5a3e589e9fb60fc36bfd84d369b30b7aafe0940
+          test "$(sha256sum DEVELOPMENT.md | cut -d' ' -f1)" = 4592eee33eb1366863bee3deb81469b42564ffca9dec2d689f70db29f4690d39
           test "$(sha256sum training_stations.json | cut -d' ' -f1)" = c0a6c863e94a8255dcf63cc3ea07eb7576ace7207f318372907abbf780b2f7b7
           python3 -m unittest -v
       - name: Initialize immutable run manifest

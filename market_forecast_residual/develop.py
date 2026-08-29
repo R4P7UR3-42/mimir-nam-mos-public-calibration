@@ -8,7 +8,10 @@ import datetime as dt
 import json
 import math
 import sys
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -21,7 +24,7 @@ from market_implied import evaluate as market  # noqa: E402
 
 IDENTITY = "daily_high_top_tail_market_ecmwf_residual_18z_development_v1"
 SCHEMA = "daily_high_top_tail_market_ecmwf_residual_18z_development_v1"
-DEVELOPMENT_SHA256 = "f7f04d1b85e7cf00b8d8eeb0f5a3e589e9fb60fc36bfd84d369b30b7aafe0940"
+DEVELOPMENT_SHA256 = "4592eee33eb1366863bee3deb81469b42564ffca9dec2d689f70db29f4690d39"
 STATIONS_SHA256 = "c0a6c863e94a8255dcf63cc3ea07eb7576ace7207f318372907abbf780b2f7b7"
 START = dt.date(2026, 2, 11)
 END = dt.date(2026, 3, 19)
@@ -63,27 +66,51 @@ def forecast_run(market_date: dt.date) -> dt.datetime:
     return dt.datetime.combine(market_date - dt.timedelta(days=1), dt.time(6), tzinfo=dt.timezone.utc)
 
 
-def fetch_forecast(
-    client: market.PublicClient,
+def fetch_payload(client: market.PublicClient, url: str, label: str) -> object:
+    last_error: BaseException | None = None
+    for attempt in range(2):
+        if client.used >= client.maximum:
+            raise ValueError("Frozen network request ceiling exhausted.")
+        delay = Decimal("0.25") - Decimal(str(time.monotonic() - client.last_started))
+        if delay > 0:
+            time.sleep(float(delay))
+        client.last_started = time.monotonic()
+        client.used += 1
+        request = urllib.request.Request(url, headers={"User-Agent": "mimir-market-forecast-residual-development/1"})
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                body = response.read()
+                headers = {key.lower(): value for key, value in response.headers.items()}
+        except urllib.error.HTTPError as error:
+            if error.code == 429:
+                raise ValueError("Provider acquisition stopped on HTTP 429 without retry.") from error
+            raise
+        except (urllib.error.URLError, TimeoutError) as error:
+            last_error = error
+            if attempt == 0:
+                time.sleep(2)
+                continue
+            raise ValueError("Provider transport failed twice before an HTTP response.") from error
+        market.create_once(client.output_dir / "raw" / f"{label}.json", body)
+        market.atomic_json(client.output_dir / "raw" / f"{label}.headers.json", headers)
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"Provider JSON is malformed for {label}.") from error
+    raise AssertionError(f"Unreachable transport state: {last_error}")
+
+
+def parse_forecast(
+    payload: object,
+    url: str,
+    label: str,
     station: dict[str, object],
     market_date: dt.date,
 ) -> dict[str, object]:
     run = forecast_run(market_date)
-    query = {
-        "latitude": str(station["latitude"]),
-        "longitude": str(station["longitude"]),
-        "hourly": "temperature_2m",
-        "temperature_unit": "fahrenheit",
-        "timezone": "UTC",
-        "models": "ecmwf_ifs",
-        "run": run.strftime("%Y-%m-%dT%H:%M"),
-        "forecast_hours": "96",
-    }
-    url = f"{FORECAST_BASE}?{urllib.parse.urlencode(query)}"
-    label = f"training-{station['series_ticker']}-{market_date.isoformat()}-ecmwf-06z"
-    payload = client.fetch(url, label)
     if (
-        payload.get("utc_offset_seconds") != 0
+        not isinstance(payload, dict)
+        or payload.get("utc_offset_seconds") != 0
         or payload.get("timezone") != "GMT"
         or not isinstance(payload.get("hourly_units"), dict)
         or payload["hourly_units"].get("temperature_2m") != "°F"
@@ -131,14 +158,41 @@ def fetch_forecast(
     }
 
 
+def fetch_forecasts(
+    client: market.PublicClient,
+    stations: list[dict[str, object]],
+    market_date: dt.date,
+) -> dict[str, dict[str, object]]:
+    run = forecast_run(market_date)
+    query = {
+        "latitude": ",".join(str(row["latitude"]) for row in stations),
+        "longitude": ",".join(str(row["longitude"]) for row in stations),
+        "hourly": "temperature_2m",
+        "temperature_unit": "fahrenheit",
+        "timezone": "UTC",
+        "models": "ecmwf_ifs",
+        "run": run.strftime("%Y-%m-%dT%H:%M"),
+        "forecast_hours": "96",
+    }
+    url = f"{FORECAST_BASE}?{urllib.parse.urlencode(query)}"
+    label = f"training-{market_date.isoformat()}-ecmwf-06z-all-stations"
+    payload = fetch_payload(client, url, label)
+    if not isinstance(payload, list) or len(payload) != len(stations):
+        raise ValueError(f"Batched forecast response is malformed for {label}.")
+    return {
+        str(station["station_id"]): parse_forecast(item, url, label, station, market_date)
+        for station, item in zip(stations, payload, strict=True)
+    }
+
+
 def usable_row(
     client: market.PublicClient,
     station: dict[str, object],
     market_date: dt.date,
     top: dict[str, object],
+    forecast: dict[str, object],
 ) -> dict[str, object]:
     quote = market.capture_quote(client, str(station["series_ticker"]), market_date, top, "training")
-    forecast = fetch_forecast(client, station, market_date)
     threshold = market.decimal_value(top.get("floor_strike"), "top threshold")
     base = {
         **quote,
@@ -320,11 +374,21 @@ def main() -> None:
     cutoff = market.validate_historical_cutoff(client)
     fee_identities = [market.validate_fee_identity(client, str(row["series_ticker"]), "training") for row in stations]
     rows: list[dict[str, object]] = []
+    market_maps = {}
     for station in stations:
         ticker = str(station["series_ticker"])
-        markets = market.discover_top_markets(client, ticker, START, END, "training", True)
-        for market_date in sorted(markets):
-            rows.append(usable_row(client, station, market_date, markets[market_date]))
+        market_maps[ticker] = market.discover_top_markets(client, ticker, START, END, "training", True)
+    for market_date in market.date_range(START, END):
+        forecasts = fetch_forecasts(client, stations, market_date)
+        for station in stations:
+            ticker = str(station["series_ticker"])
+            rows.append(usable_row(
+                client,
+                station,
+                market_date,
+                market_maps[ticker][market_date],
+                forecasts[str(station["station_id"])],
+            ))
             print(json.dumps({
                 "series_ticker": ticker,
                 "market_date": market_date.isoformat(),

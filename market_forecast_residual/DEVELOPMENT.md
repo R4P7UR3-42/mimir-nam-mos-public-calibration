@@ -21,7 +21,9 @@ not introduce an Open-Meteo subscription, API key, or commercial runtime depende
 Training rows require a displayed NO limit in `[0.5000,0.9700]`, a finite top threshold, an exact final outcome, and
 complete forecast coverage. One-contract taker fee is `ceil_0.0001(0.07*p*(1-p))`. This is model development, not
 calibration, executable evidence, or profit evidence. Stop on HTTP 429 without retry, pace all sources at no more than
-four requests per second, and enforce an exact 5,000-request ceiling.
+four requests per second, and enforce an exact 5,000-request ceiling. Batch the ten forecast locations into one request
+per run date. A transport or TLS failure before any HTTP response may receive exactly one bounded retry; every HTTP
+error is terminal.
 
 ## Frozen model menu and selection
 
