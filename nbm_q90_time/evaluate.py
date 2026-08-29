@@ -21,9 +21,9 @@ if SPEC is None or SPEC.loader is None:
 price = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(price)
 
-SCHEMA = "noaa_nbm_v5_q90_pre_observation_liquidity_split_evaluation_v1"
-IDENTITY = "noaa_nbm_v5_q90_pre_observation_liquidity_split_development_v1"
-PREDECLARATION_SHA256 = "70036dd48332d1b4e13da5d0912c562e3dac17d351dc7fcc6b1b80e037d60d73"
+SCHEMA = "noaa_nbm_v5_q90_pre_observation_liquidity_split_evaluation_v2"
+IDENTITY = "noaa_nbm_v5_q90_pre_observation_liquidity_split_development_v2"
+PREDECLARATION_SHA256 = "c20bbac7770b6d98c6a6e1efe79d40e22cf86954978f2d0f2a707f16c0883ad5"
 PARENT_V3_SHA256 = "e12f0c642d5f7228d1ce7f5a584d6656cc9ce175c9f8b4d0efebe13068e16bde"
 TRAINING_START = dt.date(2026, 5, 8)
 TRAINING_END = dt.date(2026, 6, 26)
@@ -36,6 +36,78 @@ CLOCKS = [
     {"id": "market_0000z", "day_offset": 0, "hour": 0, "minute": 0},
     {"id": "market_0300z", "day_offset": 0, "hour": 3, "minute": 0},
 ]
+
+
+class ResilientPublicClient(price.PublicClient):
+    """Bounded GET recovery with attempt-level immutable evidence."""
+
+    def fetch(self, url: str, label: str) -> dict[str, object]:
+        for attempt in range(1, 4):
+            if self.used >= self.maximum:
+                raise ValueError("Frozen network request ceiling exhausted.")
+            delay = Decimal("0.25") - Decimal(str(price.time.monotonic() - self.last_started))
+            if delay > 0:
+                price.time.sleep(float(delay))
+            self.last_started = price.time.monotonic()
+            self.used += 1
+            request = price.urllib.request.Request(
+                url, headers={"User-Agent": "mimir-nbm-q90-time-public-development/2"}
+            )
+            try:
+                with price.urllib.request.urlopen(request, timeout=60) as response:
+                    body = response.read()
+                    headers = {key.lower(): value for key, value in response.headers.items()}
+                    status = response.getcode()
+            except price.urllib.error.HTTPError as error:
+                error_body = error.read()
+                error_headers = {key.lower(): value for key, value in error.headers.items()}
+                price.create_once(
+                    self.output_dir / "raw" / f"{label}.attempt-{attempt}.http-error-body",
+                    error_body,
+                )
+                price.atomic_json(self.output_dir / "raw" / f"{label}.attempt-{attempt}.http-error.json", {
+                    "attempt": attempt,
+                    "request_index": self.used,
+                    "request_url": url,
+                    "response_status": error.code,
+                    "response_sha256": price.sha256(error_body),
+                    "response_headers": error_headers,
+                })
+                if error.code == 429:
+                    raise ValueError("Provider acquisition stopped on HTTP 429 without retry.") from error
+                if error.code < 500 or error.code > 599 or attempt == 3:
+                    raise
+                price.time.sleep(float(attempt))
+                continue
+            except (price.urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+                price.atomic_json(self.output_dir / "raw" / f"{label}.attempt-{attempt}.transport-error.json", {
+                    "attempt": attempt,
+                    "request_index": self.used,
+                    "request_url": url,
+                    "error_type": type(error).__name__,
+                    "diagnostic": str(error)[:240],
+                })
+                if attempt == 3:
+                    raise ValueError("Provider transport failed after exactly three attempts.") from error
+                price.time.sleep(float(attempt))
+                continue
+            price.create_once(self.output_dir / "raw" / f"{label}.json", body)
+            price.atomic_json(self.output_dir / "raw" / f"{label}.headers.json", headers)
+            price.atomic_json(self.output_dir / "raw" / f"{label}.request.json", {
+                "successful_attempt": attempt,
+                "request_index": self.used,
+                "request_url": url,
+                "response_status": status,
+                "response_sha256": price.sha256(body),
+            })
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"Provider JSON is malformed for {label}.") from error
+            if not isinstance(payload, dict):
+                raise ValueError(f"Provider payload is not an object for {label}.")
+            return payload
+        raise AssertionError("Unreachable bounded request state.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -319,7 +391,7 @@ def held_out_diagnostic(rows: list[dict[str, object]]) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     price.assert_not_production_host()
-    if price.file_sha256(ROOT / "PREDECLARATION.md") != PREDECLARATION_SHA256:
+    if price.file_sha256(ROOT / "PREDECLARATION_V2.md") != PREDECLARATION_SHA256:
         raise ValueError("Frozen time-surface predeclaration hash is invalid.")
     station_rows, station_map = price.load_station_map(PRICE_ROOT / "station_series.json")
     parent_rows = price.load_parent_rows(PRICE_ROOT, station_map)
@@ -327,7 +399,7 @@ def main() -> None:
         raise ValueError("Frozen 99-date parent coverage is invalid.")
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    client = price.PublicClient(output_dir, args.max_requests)
+    client = ResilientPublicClient(output_dir, args.max_requests)
     fee_identities = [price.validate_fee_identity(client, row["series_ticker"]) for row in station_rows]
     cutoffs = price.historical_cutoffs(client)
     rows_by_station: dict[str, list[dict[str, object]]] = defaultdict(list)
@@ -406,7 +478,10 @@ def main() -> None:
             "maximum_requests": price.NETWORK_LIMIT,
             "actual_requests": client.used,
             "maximum_requests_per_second": 4,
-            "no_retry": True,
+            "maximum_attempts_per_logical_get": 3,
+            "retry_only_transport_or_http_5xx": True,
+            "retry_delays_seconds": [1, 2],
+            "no_retry_http_429_or_other_4xx": True,
             "stop_on_http_429": True,
         },
         "historical_cutoffs": cutoffs,

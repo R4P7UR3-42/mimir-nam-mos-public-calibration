@@ -1,4 +1,4 @@
-name: Isolated public NOAA NBM Q90 time development
+name: Isolated public NOAA NBM Q90 time development v2
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: isolated-public-noaa-nbm-q90-time-v1
+  group: isolated-public-noaa-nbm-q90-time-v2
   cancel-in-progress: false
 
 jobs:
@@ -20,10 +20,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
-      - name: Verify frozen split identity, inputs, and tests
+      - name: Verify frozen split v2 identity, inputs, and tests
         working-directory: nbm_q90_time
         run: |
-          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = 70036dd48332d1b4e13da5d0912c562e3dac17d351dc7fcc6b1b80e037d60d73
+          test "$(sha256sum PREDECLARATION_V2.md | cut -d' ' -f1)" = c20bbac7770b6d98c6a6e1efe79d40e22cf86954978f2d0f2a707f16c0883ad5
           test "$(sha256sum ../nbm_q90_price/station_series.json | cut -d' ' -f1)" = 98a46e35e06c485cfcaa2b2632a2559b90cb5012491f718f5a570d13a26cdbbd
           test "$(sha256sum ../nbm_qmd/inputs/33155927949.json | cut -d' ' -f1)" = 658b4c8d9a0c4361bb2e91efb1d44eda2d82f37112fcc4f176078811e3501430
           test "$(sha256sum ../nbm_qmd/inputs/33156510785.json | cut -d' ' -f1)" = a759de0e02a095ee38d26b452aa4a922ec09162d1e90552d1b9fafd7147d7f45
@@ -31,41 +31,41 @@ jobs:
           test "$(sha256sum ../nbm_qmd/inputs/33156598208.json | cut -d' ' -f1)" = 1d5110c2b94be884c70e254866415176109e3b6a26c95592b42cb8df45f22992
           python3 -m py_compile evaluate.py test_evaluate.py test_workflow.py
           python3 -m unittest -v
-      - name: Initialize immutable public run manifest
+      - name: Initialize immutable public v2 run manifest
         run: |
           umask 077
-          root=/tmp/mimir-nbm-q90-time-public
+          root=/tmp/mimir-nbm-q90-time-public-v2
           mkdir -p "$root"
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg head_sha "$GITHUB_SHA" \
-            '{schema:"noaa_nbm_q90_time_public_run_v1",run_id:$run_id,head_sha:$head_sha,identity:"noaa_nbm_v5_q90_pre_observation_liquidity_split_development_v1",predeclaration_sha256:"70036dd48332d1b4e13da5d0912c562e3dac17d351dc7fcc6b1b80e037d60d73",research_only:true,active_trading_capability_changed:false,production_database_accessed:false,independent_oos_evidence:false}' \
+            '{schema:"noaa_nbm_q90_time_public_run_v2",run_id:$run_id,head_sha:$head_sha,identity:"noaa_nbm_v5_q90_pre_observation_liquidity_split_development_v2",predeclaration_sha256:"c20bbac7770b6d98c6a6e1efe79d40e22cf86954978f2d0f2a707f16c0883ad5",research_only:true,active_trading_capability_changed:false,production_database_accessed:false,independent_oos_evidence:false}' \
             > "$root/run.json"
-      - name: Run the single frozen split development audit
+      - name: Run the single frozen v2 split development audit
         id: evaluation
         continue-on-error: true
         run: |
           timeout --signal=TERM --kill-after=30s 30m \
             python3 nbm_q90_time/evaluate.py \
-              --output-dir /tmp/mimir-nbm-q90-time-public/evidence \
+              --output-dir /tmp/mimir-nbm-q90-time-public-v2/evidence \
               --max-requests 3000
           jq '{schema,identity,network_policy,clock_design,training_window,held_out_window,support_funnel,training_clock_diagnostics:(.training_clock_diagnostics|map(del(.selections))),selected_clock,held_out_evaluation:(.held_out_evaluation|del(.selections)),research_only,active_trading_capability_changed,production_database_accessed,independent_oos_evidence,capital_risk_authority,production_activation}' \
-            /tmp/mimir-nbm-q90-time-public/evidence/report.json
-      - name: Seal immutable public evidence
+            /tmp/mimir-nbm-q90-time-public-v2/evidence/report.json
+      - name: Seal immutable public v2 evidence
         if: always()
         run: |
-          root=/tmp/mimir-nbm-q90-time-public
+          root=/tmp/mimir-nbm-q90-time-public-v2
           cd "$root"
           find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
           sha256sum -c SHA256SUMS
-      - name: Upload immutable public artifact
+      - name: Upload immutable public v2 artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: noaa-nbm-q90-time-development-${{ github.run_id }}
-          path: /tmp/mimir-nbm-q90-time-public
+          name: noaa-nbm-q90-time-development-v2-${{ github.run_id }}
+          path: /tmp/mimir-nbm-q90-time-public-v2
           if-no-files-found: error
           retention-days: 1
-      - name: Preserve terminal source or runner failure
+      - name: Preserve terminal v2 source or runner failure
         if: always() && steps.evaluation.outcome != 'success'
         run: exit 1

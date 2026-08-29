@@ -1,8 +1,12 @@
 import datetime as dt
 import importlib.util
+import io
+import json
+import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("evaluate.py")
@@ -10,6 +14,21 @@ SPEC = importlib.util.spec_from_file_location("nbm_q90_time_evaluate", MODULE_PA
 assert SPEC is not None and SPEC.loader is not None
 evaluate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(evaluate)
+
+
+class LocalResponse(io.BytesIO):
+    def __init__(self, payload):
+        super().__init__(json.dumps(payload).encode())
+        self.headers = {}
+
+    def getcode(self):
+        return 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
 
 
 class NbmQ90TimeTest(unittest.TestCase):
@@ -72,6 +91,40 @@ class NbmQ90TimeTest(unittest.TestCase):
                 client, {**base, "clock_id": clock_id}, "2026-06-29T00:00:00Z",
             ))
         self.assertEqual(len(set(client.labels)), 2)
+
+    def test_transport_recovery_is_bounded_counted_and_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            client = evaluate.ResilientPublicClient(Path(temporary), evaluate.price.NETWORK_LIMIT)
+            with (
+                mock.patch.object(
+                    evaluate.price.urllib.request,
+                    "urlopen",
+                    side_effect=[
+                        evaluate.price.urllib.error.URLError(ConnectionResetError(104, "reset")),
+                        LocalResponse({"ok": True}),
+                    ],
+                ),
+                mock.patch.object(evaluate.price.time, "sleep"),
+            ):
+                self.assertEqual(client.fetch("https://example.test/source", "source"), {"ok": True})
+            self.assertEqual(client.used, 2)
+            request = json.loads((Path(temporary) / "raw/source.request.json").read_text())
+            failure = json.loads((Path(temporary) / "raw/source.attempt-1.transport-error.json").read_text())
+            self.assertEqual(request["successful_attempt"], 2)
+            self.assertEqual(request["request_index"], 2)
+            self.assertEqual(failure["request_index"], 1)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            client = evaluate.ResilientPublicClient(Path(temporary), evaluate.price.NETWORK_LIMIT)
+            failure = evaluate.price.urllib.error.URLError(ConnectionResetError(104, "reset"))
+            with (
+                mock.patch.object(evaluate.price.urllib.request, "urlopen", side_effect=[failure, failure, failure]),
+                mock.patch.object(evaluate.price.time, "sleep"),
+            ):
+                with self.assertRaisesRegex(ValueError, "exactly three"):
+                    client.fetch("https://example.test/source", "source")
+            self.assertEqual(client.used, 3)
+            self.assertEqual(len(list((Path(temporary) / "raw").glob("*.transport-error.json"))), 3)
 
     def test_held_out_diagnostic_passes_full_synthetic_boundary(self) -> None:
         rows = []
