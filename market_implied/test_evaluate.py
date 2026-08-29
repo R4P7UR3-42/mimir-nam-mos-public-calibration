@@ -89,22 +89,23 @@ class MarketImpliedTest(unittest.TestCase):
             evaluate.fee(Decimal("1.0001"))
 
     def test_price_bins_bind_adjacent_boundaries(self) -> None:
-        self.assertIsNone(evaluate.price_bin(Decimal("0.6999")))
-        self.assertEqual(evaluate.price_bin(Decimal("0.7000")), "0.70-0.80")
-        self.assertEqual(evaluate.price_bin(Decimal("0.7999")), "0.70-0.80")
-        self.assertEqual(evaluate.price_bin(Decimal("0.8000")), "0.80-0.90")
-        self.assertEqual(evaluate.price_bin(Decimal("0.9000")), "0.90-0.97")
-        self.assertEqual(evaluate.price_bin(Decimal("0.9700")), "0.90-0.97")
+        self.assertIsNone(evaluate.price_bin(Decimal("0.8499")))
+        self.assertEqual(evaluate.price_bin(Decimal("0.8500")), "0.85-0.90")
+        self.assertEqual(evaluate.price_bin(Decimal("0.8999")), "0.85-0.90")
+        self.assertIsNone(evaluate.price_bin(Decimal("0.9000")))
+        self.assertIsNone(evaluate.price_bin(Decimal("0.9499")))
+        self.assertEqual(evaluate.price_bin(Decimal("0.9500")), "0.95-0.97")
+        self.assertEqual(evaluate.price_bin(Decimal("0.9700")), "0.95-0.97")
         self.assertIsNone(evaluate.price_bin(Decimal("0.9701")))
 
-    def test_training_requires_thirty_dates_and_fifty_rows(self) -> None:
+    def test_training_requires_twenty_dates_and_twenty_five_rows(self) -> None:
         rows = []
         start = dt.date(2026, 1, 12)
-        for offset in range(29):
+        for offset in range(19):
             for station in ("A", "B"):
                 rows.append({
                     "candidate": True,
-                    "price_bin": "0.70-0.80",
+                    "price_bin": "0.85-0.90",
                     "market_date": (start + dt.timedelta(days=offset)).isoformat(),
                     "outcome_no": 1,
                     "series_ticker": station,
@@ -114,14 +115,22 @@ class MarketImpliedTest(unittest.TestCase):
         for station in ("A", "B"):
             rows.append({
                 "candidate": True,
-                "price_bin": "0.70-0.80",
-                "market_date": (start + dt.timedelta(days=29)).isoformat(),
+                "price_bin": "0.85-0.90",
+                "market_date": (start + dt.timedelta(days=19)).isoformat(),
                 "outcome_no": 1,
                 "series_ticker": station,
             })
         result = evaluate.calibrate(rows)
         self.assertTrue(result["bins"][0]["accepted"])
-        self.assertEqual(result["bins"][0]["rows"], 60)
+        self.assertEqual(result["bins"][0]["rows"], 40)
+
+    def test_wilson_lower_is_finite_and_fail_closed(self) -> None:
+        self.assertEqual(evaluate.wilson_lower(0, 0), None)
+        self.assertEqual(evaluate.wilson_lower(2, 1), None)
+        lower = evaluate.wilson_lower(25, 25)
+        self.assertIsNotNone(lower)
+        self.assertGreater(lower, Decimal("0.93"))
+        self.assertLess(lower, Decimal("1"))
 
     def test_decision_clock_is_prior_day_18z(self) -> None:
         self.assertEqual(
@@ -135,7 +144,7 @@ class MarketImpliedTest(unittest.TestCase):
 
     def test_request_ceiling_is_exact(self) -> None:
         with self.assertRaises(ValueError):
-            evaluate.PublicClient.__init__(object(), dt.date.today(), 3_999)
+            evaluate.PublicClient.__init__(object(), dt.date.today(), 4_999)
 
 
 if __name__ == "__main__":

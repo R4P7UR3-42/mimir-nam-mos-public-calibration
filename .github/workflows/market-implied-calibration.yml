@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: isolated-public-market-implied-18z-v1
+  group: isolated-public-market-implied-barbell-18z-v1
   cancel-in-progress: false
 
 jobs:
@@ -23,9 +23,9 @@ jobs:
       - name: Verify frozen pre-evaluation identity and tests
         working-directory: market_implied
         run: |
-          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = 633050d74f8a06006af6b66c03ff92c05dd961f8af28e0ff06dece3bfd9a67b6
-          test "$(sha256sum training_series.json | cut -d' ' -f1)" = 8779adc163f93e086ee866d89254cb99afa69da40c743631c74db9efbe4d6726
-          test "$(sha256sum evaluation_series.json | cut -d' ' -f1)" = 50b20f576354bafae06ab34b98c3980536a3248017e58a4142c339c1bdd144dc
+          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = b6274946a3687fb0b62a8bb5b60202a25c2197d7515dc8a4780b9c56dc3d1bc8
+          test "$(sha256sum training_series.json | cut -d' ' -f1)" = a8601388f04677a38aa3194a93c45ad77a1ef933a65ae9657e09a1e24f98eab1
+          test "$(sha256sum evaluation_series.json | cut -d' ' -f1)" = ac365222dee4f724a98d67fbd002d8130f2785b50e9590485fe62bbec9fa2b0c
           python3 -m unittest -v
       - name: Initialize immutable run manifest
         run: |
@@ -35,7 +35,7 @@ jobs:
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg head_sha "$GITHUB_SHA" \
-            '{schema:"market_implied_public_runner_18z_v1",run_id:$run_id,head_sha:$head_sha,identity:"daily_high_top_tail_market_implied_no_18z_v1",predeclaration_sha256:"633050d74f8a06006af6b66c03ff92c05dd961f8af28e0ff06dece3bfd9a67b6",research_only:true,active_trading_capability_changed:false,production_database_accessed:false}' \
+            '{schema:"market_implied_public_runner_barbell_18z_v1",run_id:$run_id,head_sha:$head_sha,identity:"daily_high_top_tail_market_implied_barbell_no_18z_v1",predeclaration_sha256:"b6274946a3687fb0b62a8bb5b60202a25c2197d7515dc8a4780b9c56dc3d1bc8",research_only:true,active_trading_capability_changed:false,production_database_accessed:false}' \
             > "$root/run.json"
       - name: Run single training-gated OOS evaluation
         id: evaluation
@@ -44,7 +44,7 @@ jobs:
           timeout --signal=TERM --kill-after=30s 35m \
             python3 market_implied/evaluate.py \
               --output-dir /tmp/mimir-market-implied-public/evidence \
-              --max-requests 4000
+              --max-requests 5000
           jq '{schema,identity,terminal_stage,network_policy,calibration,evaluation:(.evaluation|del(.selections))}' \
             /tmp/mimir-market-implied-public/evidence/report.json
       - name: Write portable checksums
