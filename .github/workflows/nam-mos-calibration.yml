@@ -1,0 +1,71 @@
+name: Isolated public NAM MOS calibration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-public-nam-mos-v1
+  cancel-in-progress: false
+
+jobs:
+  calibration:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Verify frozen identity and tests
+        run: |
+          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = d5e958578155c5b7ef3a2b2d59477b256cda5a936249abb4e1ca219cbd74b442
+          test "$(sha256sum stations.json | cut -d' ' -f1)" = 297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12
+          python3 -m unittest -v
+      - name: Initialize immutable run manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-nam-mos-public
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"nam_mos_public_runner_run_v1",run_id:$run_id,head_sha:$head_sha,model_identity:"nam_mos_v4_station_rolling_wilson90_v1",predeclaration_sha256:"d5e958578155c5b7ef3a2b2d59477b256cda5a936249abb4e1ca219cbd74b442",research_only:true,active_trading_capability_changed:false,historical_price_data_inspected:false}' \
+            > "$root/run.json"
+      - name: Capture complete frozen forecast and outcome evidence
+        id: acquisition
+        continue-on-error: true
+        run: |
+          timeout --signal=TERM --kill-after=30s 40m \
+            python3 capture.py --output-dir /tmp/mimir-nam-mos-public/capture --max-requests 23
+          jq '{schema,model_identity,request_policy,design,coverage}' /tmp/mimir-nam-mos-public/capture/capture.json
+      - name: Evaluate exactly one untouched hypothesis
+        id: evaluation
+        if: steps.acquisition.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 evaluate.py \
+            --capture /tmp/mimir-nam-mos-public/capture/capture.json \
+            --output /tmp/mimir-nam-mos-public/evaluation.json
+          jq '{schema,model_identity,evaluation:(.evaluation|del(.predictions))}' /tmp/mimir-nam-mos-public/evaluation.json
+      - name: Write portable checksums
+        if: always()
+        run: |
+          root=/tmp/mimir-nam-mos-public
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nam-mos-public-calibration-${{ github.run_id }}
+          path: /tmp/mimir-nam-mos-public
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal acquisition or evaluation failure
+        if: always() && (steps.acquisition.outcome != 'success' || steps.evaluation.outcome != 'success')
+        run: exit 1
