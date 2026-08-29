@@ -41,6 +41,7 @@ def exact_market(**overrides):
         "is_provisional": False,
         "mve_collection_ticker": None,
         "fee_waiver_expiration_time": None,
+        "_source_partition": "historical",
     }
     market.update(overrides)
     return market
@@ -49,10 +50,12 @@ def exact_market(**overrides):
 class QueueClient:
     def __init__(self, payloads):
         self.payloads = list(payloads)
+        self.urls = []
 
-    def fetch(self, _url, _label):
+    def fetch(self, url, _label):
         if not self.payloads:
             raise AssertionError("Unexpected provider request.")
+        self.urls.append(url)
         return self.payloads.pop(0)
 
 
@@ -164,12 +167,14 @@ class NbmQ90PriceEvaluationTest(unittest.TestCase):
         self.assertEqual(quote["no_limit"], "0.9100")
         self.assertEqual(quote["fee"], "0.0058")
         self.assertEqual(quote["conservative_edge"], "0.01720000")
+        self.assertIn("/historical/markets/", client.urls[0])
 
-        empty = evaluate.capture_quote(
-            QueueClient([{"ticker": exact_market()["ticker"], "candlesticks": []}]),
-            station_row(), exact_market(),
-        )
+        current_client = QueueClient([{"ticker": exact_market()["ticker"], "candlesticks": []}])
+        empty = evaluate.capture_quote(current_client, station_row(), {
+            **exact_market(), "_source_partition": "live",
+        })
         self.assertEqual(empty["reason"], "empty_candle")
+        self.assertIn("/series/KXHIGHTATL/markets/", current_client.urls[0])
         with self.assertRaisesRegex(ValueError, "clock"):
             evaluate.capture_quote(
                 QueueClient([{
@@ -194,9 +199,22 @@ class NbmQ90PriceEvaluationTest(unittest.TestCase):
             {"ticker": exact_market()["ticker"], "created_time": "2026-05-07T14:30:04Z", "taker_outcome_side": "no", "count_fp": "2", "no_price_dollars": "0.90", "trade_id": "fill"},
             {"ticker": exact_market()["ticker"], "created_time": "2026-05-07T14:35:00Z", "taker_outcome_side": "no", "count_fp": "1", "no_price_dollars": "0.80", "trade_id": "late"},
         ]
-        result = evaluate.fetch_executable_trade(QueueClient([{"trades": trades, "cursor": ""}]), selection)
+        trade_client = QueueClient([{"trades": trades, "cursor": ""}])
+        result = evaluate.fetch_executable_trade(
+            trade_client,
+            selection,
+            "2026-06-29T00:00:00Z",
+        )
         self.assertEqual(result["trade_id"], "fill")
         self.assertEqual(result["fee"], "0.0063")
+        self.assertIn("/historical/trades?", trade_client.urls[0])
+
+        current_selection = {**selection, "decision_at": "2026-06-29T00:00:00Z"}
+        current_client = QueueClient([{"trades": [], "cursor": ""}])
+        self.assertIsNone(evaluate.fetch_executable_trade(
+            current_client, current_selection, "2026-06-29T00:00:00Z",
+        ))
+        self.assertIn("/markets/trades?", current_client.urls[0])
 
     def test_development_decision_requires_every_predeclared_gate(self) -> None:
         quote_rows = []
@@ -224,7 +242,7 @@ class NbmQ90PriceEvaluationTest(unittest.TestCase):
                 "no_price_dollars": "0.8000",
                 "trade_id": f"trade-{offset}",
             }], "cursor": ""})
-        result = evaluate.evaluate(QueueClient(payloads), quote_rows)
+        result = evaluate.evaluate(QueueClient(payloads), quote_rows, "2026-06-29T00:00:00Z")
         self.assertTrue(result["development_support_passes"])
         self.assertEqual(result["failed_development_gates"], [])
         self.assertEqual(result["selected_submissions"], 60)

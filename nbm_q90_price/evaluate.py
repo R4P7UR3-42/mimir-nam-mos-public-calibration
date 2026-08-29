@@ -20,11 +20,11 @@ from pathlib import Path
 
 
 getcontext().prec = 40
-SCHEMA = "noaa_nbm_v5_q90_exact_threshold_no_development_evaluation_v2"
-IDENTITY = "noaa_nbm_v5_q90_exact_threshold_no_development_v2"
+SCHEMA = "noaa_nbm_v5_q90_exact_threshold_no_development_evaluation_v3"
+IDENTITY = "noaa_nbm_v5_q90_exact_threshold_no_development_v3"
 CAPTURE_SCHEMA = "noaa_nbm_v5_qmd_max_t_capture_v1"
 MODEL = "noaa_nbm_v5_qmd_station_max_t_percentiles_v1"
-PREDECLARATION_SHA256 = "9f9081b5a986183955e7d8335ce8e31b94cbfcc3c496ae8476bc0cc5209f192b"
+PREDECLARATION_SHA256 = "85b0de94b7d57dd66fe19f742601224be2cf9ef8d27bcf8152091a6448de1cc2"
 STATION_SERIES_SHA256 = "98a46e35e06c485cfcaa2b2632a2559b90cb5012491f718f5a570d13a26cdbbd"
 INPUT_SHA256 = {
     "33155927949.json": "658b4c8d9a0c4361bb2e91efb1d44eda2d82f37112fcc4f176078811e3501430",
@@ -343,23 +343,26 @@ def discover_markets(client: PublicClient, series_ticker: str) -> dict[dt.date, 
 
     by_date: dict[dt.date, list[dict[str, object]]] = defaultdict(list)
     event_by_date: dict[dt.date, str] = {}
-    for _, market in merged.values():
+    for partition, market in merged.values():
         ticker = market.get("ticker")
         market_date = event_market_date(market.get("event_ticker"), series_ticker)
         event = str(market["event_ticker"])
         if market_date in event_by_date and event_by_date[market_date] != event:
             raise ValueError(f"Multiple event identities exist for {series_ticker}|{market_date}.")
         event_by_date[market_date] = event
-        by_date[market_date].append(market)
+        by_date[market_date].append({**market, "_source_partition": partition})
     return by_date
 
 
-def historical_cutoff(client: PublicClient) -> str:
+def historical_cutoffs(client: PublicClient) -> dict[str, str]:
     url = f"{BASE_URL}/historical/cutoff"
     payload = client.fetch(url, "historical-cutoff")
-    value = payload.get("market_settled_ts")
-    parse_timestamp(value, "historical market cutoff")
-    return str(value)
+    output = {}
+    for key in ("market_settled_ts", "trades_created_ts"):
+        value = payload.get(key)
+        parse_timestamp(value, f"historical {key} cutoff")
+        output[key] = str(value)
+    return output
 
 
 def exact_q90_market(
@@ -399,11 +402,19 @@ def capture_quote(
     client: PublicClient, station_row: dict[str, object], market: dict[str, object]
 ) -> dict[str, object]:
     ticker = str(market["ticker"])
+    partition = market.get("_source_partition")
+    if partition == "historical":
+        path = f"historical/markets/{urllib.parse.quote(ticker, safe='')}/candlesticks"
+    elif partition == "live":
+        series = urllib.parse.quote(str(station_row["series_ticker"]), safe="")
+        path = f"series/{series}/markets/{urllib.parse.quote(ticker, safe='')}/candlesticks"
+    else:
+        raise ValueError(f"Candle source partition is invalid for {ticker}.")
     market_date = dt.date.fromisoformat(str(station_row["market_date"]))
     clock = decision_clock(market_date)
     timestamp = int(clock.timestamp())
     url = (
-        f"{BASE_URL}/historical/markets/{urllib.parse.quote(ticker, safe='')}/candlesticks?"
+        f"{BASE_URL}/{path}?"
         + urllib.parse.urlencode({"start_ts": timestamp, "end_ts": timestamp, "period_interval": 1})
     )
     payload = client.fetch(url, f"{station_row['station_id']}-{market_date.isoformat()}-candle")
@@ -445,15 +456,19 @@ def capture_quote(
     }
 
 
-def fetch_executable_trade(client: PublicClient, selection: dict[str, object]) -> dict[str, object] | None:
+def fetch_executable_trade(
+    client: PublicClient, selection: dict[str, object], trade_cutoff: str
+) -> dict[str, object] | None:
     ticker = str(selection["market_ticker"])
     start = parse_timestamp(selection["decision_at"], f"{ticker} decision")
     end = start + dt.timedelta(minutes=5)
+    cutoff = parse_timestamp(trade_cutoff, "historical trade cutoff")
     query = {
         "limit": "1000", "ticker": ticker,
         "min_ts": int(start.timestamp()), "max_ts": int(end.timestamp()),
     }
-    url = f"{BASE_URL}/historical/trades?{urllib.parse.urlencode(query)}"
+    path = "historical/trades" if start < cutoff else "markets/trades"
+    url = f"{BASE_URL}/{path}?{urllib.parse.urlencode(query)}"
     payload = client.fetch(url, f"{selection['station_id']}-{selection['market_date']}-trades")
     trades = payload.get("trades")
     if not isinstance(trades, list) or any(not isinstance(row, dict) for row in trades) or payload.get("cursor") not in (None, ""):
@@ -518,7 +533,9 @@ def maximum_drawdown(returns: list[Decimal]) -> Decimal:
     return drawdown
 
 
-def evaluate(client: PublicClient, quote_rows: list[dict[str, object]]) -> dict[str, object]:
+def evaluate(
+    client: PublicClient, quote_rows: list[dict[str, object]], trade_cutoff: str
+) -> dict[str, object]:
     by_date: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in quote_rows:
         if row.get("candidate") is True:
@@ -535,7 +552,7 @@ def evaluate(client: PublicClient, quote_rows: list[dict[str, object]]) -> dict[
         ))
         selections.append(rows[0])
     for selection in selections:
-        fill = fetch_executable_trade(client, selection)
+        fill = fetch_executable_trade(client, selection, trade_cutoff)
         selection["executable_trade"] = fill
         if fill is None:
             selection["submission_return"] = "0"
@@ -713,7 +730,7 @@ def main() -> None:
     args = parse_args()
     assert_not_production_host()
     root = Path(__file__).resolve().parent
-    if file_sha256(root / "PREDECLARATION_V2.md") != PREDECLARATION_SHA256:
+    if file_sha256(root / "PREDECLARATION_V3.md") != PREDECLARATION_SHA256:
         raise ValueError("Frozen predeclaration hash is invalid.")
     station_rows, station_to_series = load_station_map(root / "station_series.json")
     parent_rows = load_parent_rows(root, station_to_series)
@@ -723,7 +740,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     client = PublicClient(output_dir, args.max_requests)
     fee_identities = [validate_fee_identity(client, row["series_ticker"]) for row in station_rows]
-    cutoff = historical_cutoff(client)
+    cutoffs = historical_cutoffs(client)
     rows_by_station: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in parent_rows:
         rows_by_station[str(row["station_id"])].append(row)
@@ -756,7 +773,7 @@ def main() -> None:
                 "market_date": station_row["market_date"],
                 "network_requests": client.used,
             }, sort_keys=True), flush=True)
-    result = evaluate(client, quote_rows)
+    result = evaluate(client, quote_rows, cutoffs["trades_created_ts"])
     report = {
         "schema": SCHEMA,
         "identity": IDENTITY,
@@ -775,7 +792,7 @@ def main() -> None:
             "no_retry": True,
             "stop_on_http_429": True,
         },
-        "historical_market_cutoff": cutoff,
+        "historical_cutoffs": cutoffs,
         "market_partition_policy": {
             "live_close_start": "2026-05-08T00:00:00Z",
             "live_close_end_exclusive": "2026-08-16T00:00:00Z",
