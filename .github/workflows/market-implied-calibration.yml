@@ -1,0 +1,67 @@
+name: Isolated public market-implied calibration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-public-market-implied-v3
+  cancel-in-progress: false
+
+jobs:
+  calibration:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Verify frozen pre-evaluation identity and tests
+        working-directory: market_implied
+        run: |
+          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = 4ffe4303b7e93af8f58fe1b0c79aae44982222cf04b2e8e37b01c65956cd94e3
+          test "$(sha256sum training_series.json | cut -d' ' -f1)" = 8779adc163f93e086ee866d89254cb99afa69da40c743631c74db9efbe4d6726
+          test "$(sha256sum evaluation_series.json | cut -d' ' -f1)" = 50b20f576354bafae06ab34b98c3980536a3248017e58a4142c339c1bdd144dc
+          python3 -m unittest -v
+      - name: Initialize immutable run manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-market-implied-public
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"market_implied_public_runner_v3",run_id:$run_id,head_sha:$head_sha,identity:"daily_high_top_tail_market_implied_no_v3",predeclaration_sha256:"4ffe4303b7e93af8f58fe1b0c79aae44982222cf04b2e8e37b01c65956cd94e3",research_only:true,active_trading_capability_changed:false,production_database_accessed:false}' \
+            > "$root/run.json"
+      - name: Run single training-gated OOS evaluation
+        id: evaluation
+        continue-on-error: true
+        run: |
+          timeout --signal=TERM --kill-after=30s 50m \
+            python3 market_implied/evaluate.py \
+              --output-dir /tmp/mimir-market-implied-public/evidence \
+              --max-requests 2200
+          jq '{schema,identity,terminal_stage,network_policy,calibration,evaluation:(.evaluation|del(.selections))}' \
+            /tmp/mimir-market-implied-public/evidence/report.json
+      - name: Write portable checksums
+        if: always()
+        run: |
+          root=/tmp/mimir-market-implied-public
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: market-implied-public-calibration-${{ github.run_id }}
+          path: /tmp/mimir-market-implied-public
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal source or runner failure
+        if: always() && steps.evaluation.outcome != 'success'
+        run: exit 1
