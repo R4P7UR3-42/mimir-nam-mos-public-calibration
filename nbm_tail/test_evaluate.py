@@ -94,22 +94,60 @@ class NbmTailTest(unittest.TestCase):
         self.assertEqual(evaluate.select_rows(rows)[0]["market_ticker"], "A")
 
     def test_two_tails_receive_distinct_artifact_station_identities(self) -> None:
-        seen = []
+        class Client:
+            def __init__(self):
+                self.labels = []
 
-        def capture(_client, station_row, market, clock):
-            seen.append((station_row["station_id"], market["ticker"], clock["id"]))
-            return {**station_row, "market_ticker": market["ticker"]}
+            def fetch(self, _url, label):
+                self.labels.append(label)
+                ticker = "UPPER" if "UPPER" in label else "LOWER"
+                return {"ticker": ticker, "candlesticks": []}
 
-        station = {"station_id": "KATL"}
-        with mock.patch.object(evaluate.time_model, "capture_at", side_effect=capture):
-            first = evaluate.capture_tail(object(), station, {"ticker": "UPPER"})
-            second = evaluate.capture_tail(object(), station, {"ticker": "LOWER"})
+        client = Client()
+        station = {"station_id": "KATL", "series_ticker": "SERIES", "market_date": "2026-07-01"}
+        base = {"event_ticker": "SERIES-26JUL01", "_source_partition": "live", "result": "no"}
+        first = evaluate.capture_tail(client, station, {**base, "ticker": "UPPER"})
+        second = evaluate.capture_tail(client, station, {**base, "ticker": "LOWER"})
         self.assertEqual(first["station_id"], "KATL")
         self.assertEqual(second["station_id"], "KATL")
+        self.assertEqual(len(set(client.labels)), 2)
+        self.assertIn("KATL-UPPER-2026-07-01-prior_1430z-candle", client.labels)
+        self.assertIn("KATL-LOWER-2026-07-01-prior_1430z-candle", client.labels)
+
+    def test_legacy_and_current_bid_schemas_are_exact_and_exclusive(self) -> None:
         self.assertEqual(
-            seen,
-            [("KATL-UPPER", "UPPER", "prior_1430z"), ("KATL-LOWER", "LOWER", "prior_1430z")],
+            evaluate.yes_bid_close({"yes_bid": {"close": "0.41"}}, "LEGACY"),
+            (Decimal("0.41"), "close"),
         )
+        self.assertEqual(
+            evaluate.yes_bid_close({"yes_bid": {"close_dollars": "0.4100"}}, "CURRENT"),
+            (Decimal("0.4100"), "close_dollars"),
+        )
+        self.assertEqual(evaluate.yes_bid_close({"yes_bid": {}}, "MISSING"), (None, None))
+        with self.assertRaisesRegex(ValueError, "both close schemas"):
+            evaluate.yes_bid_close(
+                {"yes_bid": {"close": "0.41", "close_dollars": "0.4100"}}, "BOTH",
+            )
+        with self.assertRaisesRegex(ValueError, "malformed"):
+            evaluate.yes_bid_close({"yes_bid": {"close_dollars": "0.41"}}, "MALFORMED")
+
+    def test_current_boundary_bid_fails_closed_as_noncandidate(self) -> None:
+        class Client:
+            def fetch(self, _url, _label):
+                decision = evaluate.time_model.decision_at(
+                    dt.date(2026, 7, 1), evaluate.DECISION_CLOCK,
+                )
+                return {
+                    "ticker": "UPPER",
+                    "candlesticks": [{
+                        "end_period_ts": int(decision.timestamp()),
+                        "yes_bid": {"close_dollars": "0.0000"},
+                    }],
+                }
+
+        station = {"station_id": "KATL", "series_ticker": "SERIES", "market_date": "2026-07-01"}
+        market = {"ticker": "UPPER", "event_ticker": "SERIES-26JUL01", "_source_partition": "live", "result": "no"}
+        self.assertEqual(evaluate.capture_tail(Client(), station, market)["reason"], "boundary_yes_bid")
 
     def test_variable_score_evaluation_passes_synthetic_boundary(self) -> None:
         rows = []

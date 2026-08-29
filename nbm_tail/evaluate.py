@@ -8,6 +8,7 @@ import datetime as dt
 import importlib.util
 import json
 import math
+import re
 from collections import defaultdict
 from decimal import Decimal, ROUND_FLOOR
 from pathlib import Path
@@ -23,9 +24,9 @@ SPEC.loader.exec_module(q75)
 time_model = q75.time_model
 price = q75.price
 
-SCHEMA = "noaa_nbm_v5_station_robust_offered_tail_no_split_evaluation_v3"
-IDENTITY = "noaa_nbm_v5_station_robust_offered_tail_no_split_development_v3"
-PREDECLARATION_SHA256 = "87e8774db2ecd10a60eaa54dd086a89df2aaffc81e92a3697bfd8cc731aa7a21"
+SCHEMA = "noaa_nbm_v5_station_robust_offered_tail_no_split_evaluation_v4"
+IDENTITY = "noaa_nbm_v5_station_robust_offered_tail_no_split_development_v4"
+PREDECLARATION_SHA256 = "72156e38f7d0711c203d9b2b6af66b9e510886389c7263f598da7c3c4f7d920f"
 TRAINING_START = q75.TRAINING_START
 TRAINING_END = q75.TRAINING_END
 HELD_OUT_START = q75.HELD_OUT_START
@@ -243,20 +244,74 @@ def apply_score(row: dict[str, object], score: Decimal) -> dict[str, object]:
     }
 
 
+def yes_bid_close(candle: dict[str, object], ticker: str) -> tuple[Decimal | None, str | None]:
+    yes_bid = candle.get("yes_bid")
+    if not isinstance(yes_bid, dict):
+        return None, None
+    legacy = yes_bid.get("close")
+    dollars = yes_bid.get("close_dollars")
+    if legacy is not None and dollars is not None:
+        raise ValueError(f"Candle contains both close schemas for {ticker}.")
+    if dollars is not None:
+        if not isinstance(dollars, str) or re.fullmatch(r"[01]\.[0-9]{4}", dollars) is None:
+            raise ValueError(f"Current dollar close is malformed for {ticker}.")
+        return price.decimal_value(dollars, f"{ticker} yes bid dollars"), "close_dollars"
+    if legacy is not None:
+        return price.decimal_value(legacy, f"{ticker} yes bid legacy"), "close"
+    return None, None
+
+
 def capture_tail(
     client: price.PublicClient,
     station_row: dict[str, object],
     market: dict[str, object],
 ) -> dict[str, object]:
-    """Give each offered tail an exact create-once identity without changing its station DTO."""
-    artifact_station = f"{station_row['station_id']}-{market['ticker']}"
-    captured = time_model.capture_at(
-        client,
-        {**station_row, "station_id": artifact_station},
-        market,
-        DECISION_CLOCK,
-    )
-    return {**captured, "station_id": station_row["station_id"]}
+    ticker = str(market["ticker"])
+    market_date = dt.date.fromisoformat(str(station_row["market_date"]))
+    decision = time_model.decision_at(market_date, DECISION_CLOCK)
+    timestamp = int(decision.timestamp())
+    query = price.urllib.parse.urlencode({
+        "start_ts": timestamp,
+        "end_ts": timestamp,
+        "period_interval": 1,
+    })
+    url = f"{price.BASE_URL}/{time_model.candle_path(station_row, market)}?{query}"
+    label = f"{station_row['station_id']}-{ticker}-{market_date}-{DECISION_CLOCK['id']}-candle"
+    payload = client.fetch(url, label)
+    if payload.get("ticker") != ticker or not isinstance(payload.get("candlesticks"), list):
+        raise ValueError(f"Candle response identity is invalid for {ticker}.")
+    candles = payload["candlesticks"]
+    base = {
+        **station_row,
+        "event_ticker": market["event_ticker"],
+        "market_ticker": ticker,
+        "market_partition": market["_source_partition"],
+        "clock_id": DECISION_CLOCK["id"],
+        "clock_index": time_model.CLOCKS.index(DECISION_CLOCK),
+        "decision_at": decision.isoformat().replace("+00:00", "Z"),
+        "outcome_no": int(market["result"] == "no"),
+        "source_url": url,
+    }
+    if not candles:
+        return {**base, "candidate": False, "reason": "empty_candle"}
+    if len(candles) != 1 or not isinstance(candles[0], dict) or candles[0].get("end_period_ts") != timestamp:
+        raise ValueError(f"Candle clock identity is invalid for {ticker}.")
+    bid, schema = yes_bid_close(candles[0], ticker)
+    if bid is None:
+        return {**base, "candidate": False, "reason": "missing_yes_bid_close"}
+    if bid <= 0 or bid >= 1:
+        return {**base, "candidate": False, "reason": "boundary_yes_bid", "yes_bid": str(bid), "yes_bid_schema": schema}
+    no_limit = Decimal(1) - bid
+    if no_limit * 100 != (no_limit * 100).to_integral_value():
+        raise ValueError(f"NO limit is not exact one-cent granularity for {ticker}.")
+    return {
+        **base,
+        "candidate": False,
+        "reason": "unscored_quote",
+        "yes_bid": str(bid),
+        "yes_bid_schema": schema,
+        "no_limit": str(no_limit),
+    }
 
 
 def select_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -367,7 +422,7 @@ def evaluate_selections(rows: list[dict[str, object]]) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     price.assert_not_production_host()
-    if price.file_sha256(ROOT / "PREDECLARATION_V3.md") != PREDECLARATION_SHA256:
+    if price.file_sha256(ROOT / "PREDECLARATION_V4.md") != PREDECLARATION_SHA256:
         raise ValueError("Frozen tail predeclaration hash is invalid.")
     rows, stations = load_model_rows()
     training = training_rows(rows)

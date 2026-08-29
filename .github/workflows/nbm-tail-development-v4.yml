@@ -1,4 +1,4 @@
-name: Isolated public NOAA NBM offered-tail development v3
+name: Isolated public NOAA NBM offered-tail development v4
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: isolated-public-noaa-nbm-tail-v3
+  group: isolated-public-noaa-nbm-tail-v4
   cancel-in-progress: false
 
 jobs:
@@ -20,10 +20,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
-      - name: Verify frozen tail v3 identity, inputs, and tests
+      - name: Verify frozen tail v4 identity, inputs, and tests
         working-directory: nbm_tail
         run: |
-          test "$(sha256sum PREDECLARATION_V3.md | cut -d' ' -f1)" = 87e8774db2ecd10a60eaa54dd086a89df2aaffc81e92a3697bfd8cc731aa7a21
+          test "$(sha256sum PREDECLARATION_V4.md | cut -d' ' -f1)" = 72156e38f7d0711c203d9b2b6af66b9e510886389c7263f598da7c3c4f7d920f
           test "$(sha256sum ../nbm_q90_price/station_series.json | cut -d' ' -f1)" = 98a46e35e06c485cfcaa2b2632a2559b90cb5012491f718f5a570d13a26cdbbd
           test "$(sha256sum ../nbm_qmd/inputs/33155927949.json | cut -d' ' -f1)" = 658b4c8d9a0c4361bb2e91efb1d44eda2d82f37112fcc4f176078811e3501430
           test "$(sha256sum ../nbm_qmd/inputs/33156510785.json | cut -d' ' -f1)" = a759de0e02a095ee38d26b452aa4a922ec09162d1e90552d1b9fafd7147d7f45
@@ -31,41 +31,41 @@ jobs:
           test "$(sha256sum ../nbm_qmd/inputs/33156598208.json | cut -d' ' -f1)" = 1d5110c2b94be884c70e254866415176109e3b6a26c95592b42cb8df45f22992
           python3 -m py_compile evaluate.py test_evaluate.py test_workflow.py
           python3 -m unittest -v
-      - name: Initialize immutable public tail v3 run manifest
+      - name: Initialize immutable public tail v4 run manifest
         run: |
           umask 077
-          root=/tmp/mimir-nbm-tail-public-v3
+          root=/tmp/mimir-nbm-tail-public-v4
           mkdir -p "$root"
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg head_sha "$GITHUB_SHA" \
-            '{schema:"noaa_nbm_tail_public_run_v3",run_id:$run_id,head_sha:$head_sha,identity:"noaa_nbm_v5_station_robust_offered_tail_no_split_development_v3",predeclaration_sha256:"87e8774db2ecd10a60eaa54dd086a89df2aaffc81e92a3697bfd8cc731aa7a21",research_only:true,active_trading_capability_changed:false,production_database_accessed:false,independent_oos_evidence:false}' \
+            '{schema:"noaa_nbm_tail_public_run_v4",run_id:$run_id,head_sha:$head_sha,identity:"noaa_nbm_v5_station_robust_offered_tail_no_split_development_v4",predeclaration_sha256:"72156e38f7d0711c203d9b2b6af66b9e510886389c7263f598da7c3c4f7d920f",research_only:true,active_trading_capability_changed:false,production_database_accessed:false,independent_oos_evidence:false}' \
             > "$root/run.json"
-      - name: Run the single frozen offered-tail v3 development audit
+      - name: Run the single frozen offered-tail v4 development audit
         id: evaluation
         continue-on-error: true
         run: |
           timeout --signal=TERM --kill-after=30s 30m \
             python3 nbm_tail/evaluate.py \
-              --output-dir /tmp/mimir-nbm-tail-public-v3/evidence \
+              --output-dir /tmp/mimir-nbm-tail-public-v4/evidence \
               --max-requests 3000
           jq '{schema,identity,training_window,held_out_window,decision_clock,score_policy,price_policy,network_policy,outcome_source,outcome_conflicts,support_funnel,evaluation:(.evaluation|del(.selections)),research_only,active_trading_capability_changed,production_database_accessed,independent_oos_evidence,capital_risk_authority,production_activation}' \
-            /tmp/mimir-nbm-tail-public-v3/evidence/report.json
-      - name: Seal immutable public tail v3 evidence
+            /tmp/mimir-nbm-tail-public-v4/evidence/report.json
+      - name: Seal immutable public tail v4 evidence
         if: always()
         run: |
-          root=/tmp/mimir-nbm-tail-public-v3
+          root=/tmp/mimir-nbm-tail-public-v4
           cd "$root"
           find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
           sha256sum -c SHA256SUMS
-      - name: Upload immutable public tail v3 artifact
+      - name: Upload immutable public tail v4 artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: noaa-nbm-tail-development-v3-${{ github.run_id }}
-          path: /tmp/mimir-nbm-tail-public-v3
+          name: noaa-nbm-tail-development-v4-${{ github.run_id }}
+          path: /tmp/mimir-nbm-tail-public-v4
           if-no-files-found: error
           retention-days: 1
-      - name: Preserve terminal tail v3 source or runner failure
+      - name: Preserve terminal tail v4 source or runner failure
         if: always() && steps.evaluation.outcome != 'success'
         run: exit 1
