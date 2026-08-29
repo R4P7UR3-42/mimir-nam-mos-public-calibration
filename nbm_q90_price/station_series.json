@@ -1,0 +1,22 @@
+[
+  {"station_id":"KATL","series_ticker":"KXHIGHTATL"},
+  {"station_id":"KAUS","series_ticker":"KXHIGHAUS"},
+  {"station_id":"KBOS","series_ticker":"KXHIGHTBOS"},
+  {"station_id":"KDCA","series_ticker":"KXHIGHTDC"},
+  {"station_id":"KDEN","series_ticker":"KXHIGHDEN"},
+  {"station_id":"KDFW","series_ticker":"KXHIGHTDAL"},
+  {"station_id":"KHOU","series_ticker":"KXHIGHTHOU"},
+  {"station_id":"KLAS","series_ticker":"KXHIGHTLV"},
+  {"station_id":"KLAX","series_ticker":"KXHIGHLAX"},
+  {"station_id":"KMDW","series_ticker":"KXHIGHCHI"},
+  {"station_id":"KMIA","series_ticker":"KXHIGHMIA"},
+  {"station_id":"KMSP","series_ticker":"KXHIGHTMIN"},
+  {"station_id":"KMSY","series_ticker":"KXHIGHTNOLA"},
+  {"station_id":"KNYC","series_ticker":"KXHIGHNY"},
+  {"station_id":"KOKC","series_ticker":"KXHIGHTOKC"},
+  {"station_id":"KPHL","series_ticker":"KXHIGHPHIL"},
+  {"station_id":"KPHX","series_ticker":"KXHIGHTPHX"},
+  {"station_id":"KSAT","series_ticker":"KXHIGHTSATX"},
+  {"station_id":"KSEA","series_ticker":"KXHIGHTSEA"},
+  {"station_id":"KSFO","series_ticker":"KXHIGHTSFO"}
+]
