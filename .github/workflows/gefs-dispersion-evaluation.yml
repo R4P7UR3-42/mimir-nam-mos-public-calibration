@@ -1,0 +1,121 @@
+name: Isolated public GEFSv12 dispersion evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: Optional failed exact-identity run whose checksum-valid rows should be resumed
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: isolated-public-gefs-dispersion-evaluation-v1
+  cancel-in-progress: false
+
+jobs:
+  evaluation:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: gefs_dispersion/requirements.txt
+      - name: Verify frozen model, implementation, and tests
+        working-directory: gefs_dispersion
+        run: |
+          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = 7bc055938dcb0332e94dd6486f5249be2fa6eef632cf2d5ee44524274036f9d0
+          test "$(sha256sum requirements.txt | cut -d' ' -f1)" = 140a23952a22d9809dc837f750aec73f9c4225f5e0d26b04ea9c679bc3060db9
+          test "$(sha256sum capture.py | cut -d' ' -f1)" = bda70eaa64e721e2601b9fb8798d89f7f4894b10263d58b79263ca2f7f01ca64
+          test "$(sha256sum evaluate.py | cut -d' ' -f1)" = 3419c34cc9bd58f8329fcab17237638b4ec09d92d076139db67770c976596b57
+          test "$(sha256sum ../stations.json | cut -d' ' -f1)" = 297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12
+          python3 -m py_compile canary.py capture.py evaluate.py test_canary.py test_capture.py test_evaluate.py test_workflow.py
+          python3 -m unittest -v
+      - name: Install pinned ecCodes decoder
+        run: python3 -m pip install --disable-pip-version-check -r gefs_dispersion/requirements.txt
+      - name: Verify decoder without inherited dynamic-loader authority
+        run: env -u LD_LIBRARY_PATH python3 -c 'import eccodes; assert eccodes.codes_get_api_version() == "2.48.0"'
+      - name: Restore checksum-valid partial capture
+        if: inputs.resume_run_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: noaa-gefs-dispersion-evaluation-v1-${{ inputs.resume_run_id }}
+          path: /tmp/mimir-gefs-dispersion-evaluation-v1
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.resume_run_id }}
+          digest-mismatch: error
+      - name: Validate optional resume identity
+        env:
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+        run: |
+          root=/tmp/mimir-gefs-dispersion-evaluation-v1
+          if [[ -n "$RESUME_RUN_ID" ]]; then
+            [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]
+            cd "$root"
+            sha256sum -c SHA256SUMS
+            jq -e --arg run_id "$RESUME_RUN_ID" \
+              '.schema == "noaa_gefs_v12_public_evaluation_run_v1" and .run_id == $run_id and (.head_sha | test("^[0-9a-f]{40}$"))' \
+              run.json >/dev/null
+            mv run.json resume-source.json
+            rm SHA256SUMS
+          else
+            mkdir -p "$root"
+          fi
+      - name: Initialize immutable public evaluation manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-gefs-dispersion-evaluation-v1
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"noaa_gefs_v12_public_evaluation_run_v1",run_id:$run_id,head_sha:$head_sha,identity:"noaa_gefs_v12_five_member_station_z_wilson95_rolling120_lag2_v1",predeclaration_sha256:"7bc055938dcb0332e94dd6486f5249be2fa6eef632cf2d5ee44524274036f9d0",research_only:true,active_trading_capability_changed:false,production_database_accessed:false}' \
+            > "$root/run.json"
+      - name: Capture exact 370-date five-member evidence
+        id: capture
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=30s 330m \
+            env -u LD_LIBRARY_PATH python3 gefs_dispersion/capture.py \
+              --output-dir /tmp/mimir-gefs-dispersion-evaluation-v1/evidence \
+              --max-requests 3900 \
+              --concurrency 10 | tee /tmp/mimir-gefs-dispersion-evaluation-v1/capture.log
+          jq '{schema,model_identity,request_policy,design,coverage,research_only,active_trading_capability_changed,production_database_accessed}' \
+            /tmp/mimir-gefs-dispersion-evaluation-v1/evidence/capture.json
+      - name: Evaluate single frozen 250-date hypothesis
+        id: evaluate
+        if: steps.capture.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 gefs_dispersion/evaluate.py \
+            --capture-dir /tmp/mimir-gefs-dispersion-evaluation-v1/evidence \
+            --output /tmp/mimir-gefs-dispersion-evaluation-v1/evaluation.json \
+            > /tmp/mimir-gefs-dispersion-evaluation-v1/evaluation-summary.json
+          jq '{schema,model_identity,evaluation:(.evaluation|del(.reliability_bands,.leave_one_station_out_calibration)),reliability_bands:.evaluation.reliability_bands,leave_one_station_out_calibration:.evaluation.leave_one_station_out_calibration,research_only,active_trading_capability_changed,production_database_accessed,independent_oos_calibration_evidence,executable_economics_evidence,capital_risk_authority,production_activation}' \
+            /tmp/mimir-gefs-dispersion-evaluation-v1/evaluation.json
+      - name: Seal portable evaluation evidence
+        if: always()
+        run: |
+          root=/tmp/mimir-gefs-dispersion-evaluation-v1
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public evaluation artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: noaa-gefs-dispersion-evaluation-v1-${{ github.run_id }}
+          path: /tmp/mimir-gefs-dispersion-evaluation-v1
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal source, runner, or evaluation failure
+        if: always() && (steps.capture.outcome != 'success' || steps.evaluate.outcome != 'success')
+        run: exit 1
