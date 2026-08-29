@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot market-implied top-tail NO calibration and executable evaluation."""
+"""One-shot 18Z market-implied top-tail NO calibration and executable evaluation."""
 
 from __future__ import annotations
 
@@ -19,17 +19,17 @@ from pathlib import Path
 
 
 getcontext().prec = 40
-SCHEMA = "daily_high_top_tail_market_implied_no_evaluation_v3"
-IDENTITY = "daily_high_top_tail_market_implied_no_v3"
-PREDECLARATION_SHA256 = "4ffe4303b7e93af8f58fe1b0c79aae44982222cf04b2e8e37b01c65956cd94e3"
+SCHEMA = "daily_high_top_tail_market_implied_no_18z_evaluation_v1"
+IDENTITY = "daily_high_top_tail_market_implied_no_18z_v1"
+PREDECLARATION_SHA256 = "633050d74f8a06006af6b66c03ff92c05dd961f8af28e0ff06dece3bfd9a67b6"
 TRAINING_SERIES_SHA256 = "8779adc163f93e086ee866d89254cb99afa69da40c743631c74db9efbe4d6726"
 EVALUATION_SERIES_SHA256 = "50b20f576354bafae06ab34b98c3980536a3248017e58a4142c339c1bdd144dc"
-BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-TRAINING_START = dt.date(2026, 1, 12)
+BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
+TRAINING_START = dt.date(2026, 2, 11)
 TRAINING_END = dt.date(2026, 3, 19)
-EVALUATION_START = dt.date(2026, 3, 20)
-EVALUATION_END = dt.date(2026, 6, 27)
-NETWORK_LIMIT = 2_200
+EVALUATION_START = dt.date(2026, 3, 21)
+EVALUATION_END = dt.date(2026, 6, 28)
+NETWORK_LIMIT = 4_000
 BOOTSTRAP_SAMPLES = 10_000
 FEE_RATE = Decimal("0.07")
 FEE_QUANTUM = Decimal("0.0001")
@@ -38,6 +38,7 @@ MONTHS = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
     "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
 }
+MONTH_NAMES = {value: key for key, value in MONTHS.items()}
 PRICE_BINS = (
     (Decimal("0.7000"), Decimal("0.8000"), False, "0.70-0.80"),
     (Decimal("0.8000"), Decimal("0.9000"), False, "0.80-0.90"),
@@ -108,6 +109,10 @@ def event_market_date(event_ticker: object, series_ticker: str) -> dt.date:
         return dt.date(year, MONTHS[suffix[2:5]], int(suffix[5:]))
     except ValueError as error:
         raise ValueError(f"Event date is malformed for {event_ticker}.") from error
+
+
+def exact_event_ticker(series_ticker: str, market_date: dt.date) -> str:
+    return f"{series_ticker}-{market_date.year % 100:02d}{MONTH_NAMES[market_date.month]}{market_date.day:02d}"
 
 
 def decimal_value(value: object, label: str) -> Decimal:
@@ -222,6 +227,22 @@ def validate_fee_identity(client: PublicClient, series_ticker: str, phase: str) 
     }
 
 
+def validate_historical_cutoff(client: PublicClient) -> dict[str, object]:
+    url = f"{BASE_URL}/historical/cutoff"
+    payload = client.fetch(url, "historical-cutoff")
+    market_cutoff = parse_timestamp(payload.get("market_settled_ts"), "historical market cutoff")
+    trade_cutoff = parse_timestamp(payload.get("trades_created_ts"), "historical trade cutoff")
+    last_market_boundary = dt.datetime(2026, 6, 29, tzinfo=dt.timezone.utc)
+    last_trade_boundary = decision_clock(EVALUATION_END) + dt.timedelta(minutes=5)
+    if market_cutoff <= last_market_boundary or trade_cutoff <= last_trade_boundary:
+        raise ValueError("Historical cutoff does not contain the complete frozen evaluation window.")
+    return {
+        "url": url,
+        "market_settled_ts": market_cutoff.isoformat().replace("+00:00", "Z"),
+        "trades_created_ts": trade_cutoff.isoformat().replace("+00:00", "Z"),
+    }
+
+
 def discover_top_markets(
     client: PublicClient,
     series_ticker: str,
@@ -230,44 +251,35 @@ def discover_top_markets(
     phase: str,
     require_every_date: bool,
 ) -> dict[dt.date, dict[str, object]]:
-    markets: list[dict[str, object]] = []
-    cursor = ""
-    for page in (1, 2):
-        query = {"limit": "1000", "series_ticker": series_ticker}
-        if cursor:
-            query["cursor"] = cursor
+    top_by_date: dict[dt.date, dict[str, object]] = {}
+    for market_date in date_range(start, end):
+        event = exact_event_ticker(series_ticker, market_date)
+        query = {"event_ticker": event, "limit": "1000"}
         url = f"{BASE_URL}/historical/markets?{urllib.parse.urlencode(query)}"
-        payload = client.fetch(url, f"{phase}-{series_ticker}-markets-{page}")
+        payload = client.fetch(url, f"{phase}-{series_ticker}-{market_date.isoformat()}-markets")
         page_markets = payload.get("markets")
         next_cursor = payload.get("cursor")
         if not isinstance(page_markets, list) or any(not isinstance(row, dict) for row in page_markets):
-            raise ValueError(f"Historical market page is malformed for {series_ticker}.")
-        if not isinstance(next_cursor, str):
-            raise ValueError(f"Historical market cursor is malformed for {series_ticker}.")
-        markets.extend(page_markets)
-        cursor = next_cursor
-        if not cursor:
-            break
-    if cursor:
-        raise ValueError(f"Historical market pagination exceeded two pages for {series_ticker}.")
-    by_event: dict[tuple[dt.date, str], list[dict[str, object]]] = defaultdict(list)
-    for market in markets:
-        ticker = market.get("ticker")
-        if not isinstance(ticker, str) or not ticker.startswith(f"{series_ticker}-"):
-            raise ValueError(f"Historical market identity drifted for {series_ticker}.")
-        market_date = event_market_date(market.get("event_ticker"), series_ticker)
-        if market_date < start or market_date > end:
+            raise ValueError(f"Historical event market response is malformed for {event}.")
+        if next_cursor != "":
+            raise ValueError(f"Historical event market response is not terminal for {event}.")
+        if not page_markets:
+            if require_every_date:
+                raise ValueError(f"Historical event market coverage is missing for {event}.")
             continue
-        occurrence = market.get("occurrence_datetime")
-        if occurrence is not None and parse_timestamp(occurrence, f"{ticker} occurrence").date() != market_date:
-            raise ValueError(f"Occurrence date conflicts for {ticker}.")
-        event = str(market["event_ticker"])
-        by_event[(market_date, event)].append(market)
-    top_by_date: dict[dt.date, dict[str, object]] = {}
-    for (market_date, event), event_markets in by_event.items():
-        if market_date in top_by_date:
-            raise ValueError(f"Multiple event identities exist for {series_ticker}|{market_date}.")
-        tops = [row for row in event_markets if row.get("strike_type") == "greater"]
+        for market in page_markets:
+            ticker = market.get("ticker")
+            if (
+                not isinstance(ticker, str)
+                or not ticker.startswith(f"{event}-")
+                or market.get("event_ticker") != event
+                or event_market_date(market.get("event_ticker"), series_ticker) != market_date
+            ):
+                raise ValueError(f"Historical event market identity drifted for {event}.")
+            occurrence = market.get("occurrence_datetime")
+            if occurrence is not None and parse_timestamp(occurrence, f"{ticker} occurrence").date() != market_date:
+                raise ValueError(f"Occurrence date conflicts for {ticker}.")
+        tops = [row for row in page_markets if row.get("strike_type") == "greater"]
         if len(tops) != 1:
             raise ValueError(f"Top contract identity is not unique for {event}.")
         top = tops[0]
@@ -290,7 +302,7 @@ def discover_top_markets(
 
 
 def decision_clock(market_date: dt.date) -> dt.datetime:
-    return dt.datetime.combine(market_date - dt.timedelta(days=1), dt.time(20), tzinfo=dt.timezone.utc)
+    return dt.datetime.combine(market_date - dt.timedelta(days=1), dt.time(18), tzinfo=dt.timezone.utc)
 
 
 def capture_quote(
@@ -656,13 +668,14 @@ def main() -> None:
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     client = PublicClient(output_dir, args.max_requests)
+    historical_cutoff = validate_historical_cutoff(client)
 
     training_rows, training_fees = capture_phase(
-        client, training_series, TRAINING_START, TRAINING_END, "training", False,
+        client, training_series, TRAINING_START, TRAINING_END, "training", True,
     )
     calibration = calibrate(training_rows)
     atomic_json(output_dir / "training.json", {
-        "schema": "daily_high_top_tail_market_implied_training_v3",
+        "schema": "daily_high_top_tail_market_implied_no_18z_training_v1",
         "identity": IDENTITY,
         "rows": training_rows,
         "fee_identities": training_fees,
@@ -677,6 +690,7 @@ def main() -> None:
             "research_only": True,
             "active_trading_capability_changed": False,
             "production_database_accessed": False,
+            "historical_cutoff": historical_cutoff,
             "evaluation_series_accessed": False,
             "terminal_stage": "training_rejection",
             "network_requests": client.used,
@@ -701,6 +715,7 @@ def main() -> None:
         "research_only": True,
         "active_trading_capability_changed": False,
         "production_database_accessed": False,
+        "historical_cutoff": historical_cutoff,
         "evaluation_series_accessed": True,
         "terminal_stage": "oos_evaluation",
         "network_policy": {

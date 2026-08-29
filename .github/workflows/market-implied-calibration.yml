@@ -7,14 +7,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: isolated-public-market-implied-v3
+  group: isolated-public-market-implied-18z-v1
   cancel-in-progress: false
 
 jobs:
   calibration:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -23,7 +23,7 @@ jobs:
       - name: Verify frozen pre-evaluation identity and tests
         working-directory: market_implied
         run: |
-          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = 4ffe4303b7e93af8f58fe1b0c79aae44982222cf04b2e8e37b01c65956cd94e3
+          test "$(sha256sum PREDECLARATION.md | cut -d' ' -f1)" = 633050d74f8a06006af6b66c03ff92c05dd961f8af28e0ff06dece3bfd9a67b6
           test "$(sha256sum training_series.json | cut -d' ' -f1)" = 8779adc163f93e086ee866d89254cb99afa69da40c743631c74db9efbe4d6726
           test "$(sha256sum evaluation_series.json | cut -d' ' -f1)" = 50b20f576354bafae06ab34b98c3980536a3248017e58a4142c339c1bdd144dc
           python3 -m unittest -v
@@ -35,16 +35,16 @@ jobs:
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg head_sha "$GITHUB_SHA" \
-            '{schema:"market_implied_public_runner_v3",run_id:$run_id,head_sha:$head_sha,identity:"daily_high_top_tail_market_implied_no_v3",predeclaration_sha256:"4ffe4303b7e93af8f58fe1b0c79aae44982222cf04b2e8e37b01c65956cd94e3",research_only:true,active_trading_capability_changed:false,production_database_accessed:false}' \
+            '{schema:"market_implied_public_runner_18z_v1",run_id:$run_id,head_sha:$head_sha,identity:"daily_high_top_tail_market_implied_no_18z_v1",predeclaration_sha256:"633050d74f8a06006af6b66c03ff92c05dd961f8af28e0ff06dece3bfd9a67b6",research_only:true,active_trading_capability_changed:false,production_database_accessed:false}' \
             > "$root/run.json"
       - name: Run single training-gated OOS evaluation
         id: evaluation
         continue-on-error: true
         run: |
-          timeout --signal=TERM --kill-after=30s 50m \
+          timeout --signal=TERM --kill-after=30s 35m \
             python3 market_implied/evaluate.py \
               --output-dir /tmp/mimir-market-implied-public/evidence \
-              --max-requests 2200
+              --max-requests 4000
           jq '{schema,identity,terminal_stage,network_policy,calibration,evaluation:(.evaluation|del(.selections))}' \
             /tmp/mimir-market-implied-public/evidence/report.json
       - name: Write portable checksums
