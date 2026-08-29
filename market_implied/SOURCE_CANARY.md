@@ -10,7 +10,11 @@ The other sampled series contain the complete proposed evaluation interval from 
 Only the five identities in `training_series.json` were requested. None of the 15 identities in
 `evaluation_series.json` was requested or otherwise inspected.
 
-One development market, `KXHIGHNY-26JUN27-T83`, proved the required public source shapes:
+One development series and market proved the required public source shapes:
+
+- `GET /series/KXHIGHNY` returned `fee_type=quadratic` and `fee_multiplier=1`;
+- its complete `show_historical=true` fee-change response was an empty `series_fee_change_arr`, establishing the
+  unchanged provider baseline for this development series;
 
 - exact top contract: `strike_type=greater`, `floor_strike=83`, null `cap_strike`, settled `result=no`;
 - `open_time=2026-06-26T14:00:00Z`, one day before its market date;

@@ -1,7 +1,7 @@
 # Top-Tail Market-Implied NO Predeclaration
 
 - Frozen: 2026-08-29 UTC, before any evaluation-series request
-- Identity: `daily_high_top_tail_market_implied_no_v1`
+- Identity: `daily_high_top_tail_market_implied_no_v2`
 - Training inventory SHA-256: `8779adc163f93e086ee866d89254cb99afa69da40c743631c74db9efbe4d6726`
 - Evaluation inventory SHA-256: `50b20f576354bafae06ab34b98c3980536a3248017e58a4142c339c1bdd144dc`
 - Production, database, credential, capital, recommendation, cohort, and order access: prohibited
@@ -35,10 +35,11 @@ and absence reason. Stop immediately on HTTP 429 and never retry any request. Pa
 second and cap the complete run at 2,200 network requests.
 
 Before any candle evaluation, fetch each exact series plus its complete `show_historical=true` fee-change history.
-Require the reviewed unchanged standard direct-taker quadratic schedule with multiplier `0.07`, no maker fee, and
-`$0.0001` balance precision at every decision. A fee change, missing history, future-only evidence, unsupported
-precision, waiver, or different fee type fails the run. For one contract at price `p`, compute
-`ceil_0.0001(0.07 * p * (1 - p))` exactly with decimal arithmetic.
+Require the reviewed unchanged standard direct-taker schedule with provider `fee_type=quadratic`, provider
+`fee_multiplier=1`, no maker fee, and `$0.0001` balance precision at every decision. The provider multiplier scales
+Kalshi's standard quadratic base coefficient `0.07`; it is not itself `0.07`. A fee change, missing history,
+future-only evidence, unsupported precision, waiver, or different fee type fails the run. For one contract at price
+`p`, compute `ceil_0.0001(0.07 * 1 * p * (1 - p))` exactly with decimal arithmetic.
 
 ## Frozen training calibration
 
@@ -87,6 +88,9 @@ The family passes its initial evidence decision only if every condition holds:
    one selection on a date; and
 9. the projected contracts to `$100`, `ceil(100 / lower_90_mean)`, and gross turnover at the maximum observed all-in
    cost are reported as non-guaranteed research projections only.
+
+The earlier `daily_high_top_tail_market_implied_no_v1` draft is superseded before any evaluation-series request because
+it mislabeled the provider multiplier as the base coefficient. It receives no data or decision credit.
 
 The 250-date clustered-95 scale gate is necessarily false in this 100-date evaluation and must be reported false. A
 pass permits only a separate reviewed Stage 1 cohort and capital-risk decision. It does not authorize a recommendation,
