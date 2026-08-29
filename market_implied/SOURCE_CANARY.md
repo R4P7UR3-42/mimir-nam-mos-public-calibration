@@ -17,6 +17,9 @@ One development series and market proved the required public source shapes:
   unchanged provider baseline for this development series;
 
 - exact top contract: `strike_type=greater`, `floor_strike=83`, null `cap_strike`, settled `result=no`;
+- the archived object omits current-market `is_provisional`, MVE, and fee-waiver fields; the frozen parser therefore
+  accepts only their omission or exact non-provisional/null values and still requires the exact settled binary series
+  and ticker identity;
 - `open_time=2026-06-26T14:00:00Z`, one day before its market date;
 - an exact 60-minute candle ending `2026-06-26T20:00:00Z` with `yes_bid.close=0.0000`,
   `yes_ask.close=0.0100`, prior trade price `0.0200`, and zero interval volume; and

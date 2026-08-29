@@ -1,7 +1,7 @@
 # Top-Tail Market-Implied NO Predeclaration
 
 - Frozen: 2026-08-29 UTC, before any evaluation-series request
-- Identity: `daily_high_top_tail_market_implied_no_v2`
+- Identity: `daily_high_top_tail_market_implied_no_v3`
 - Training inventory SHA-256: `8779adc163f93e086ee866d89254cb99afa69da40c743631c74db9efbe4d6726`
 - Evaluation inventory SHA-256: `50b20f576354bafae06ab34b98c3980536a3248017e58a4142c339c1bdd144dc`
 - Production, database, credential, capital, recommendation, cohort, and order access: prohibited
@@ -25,7 +25,11 @@ Use only Kalshi's public REST API. Discover every page of each exact series with
 terminal empty cursor within two pages and one complete event inventory per frozen date. Parse the market date from the
 exact event-ticker suffix and, when `occurrence_datetime` is non-null, require it to agree with that date. Admit exactly
 one binary market per event with `strike_type=greater`, a finite `floor_strike`, null `cap_strike`, and final result
-`yes` or `no`. Missing, duplicate, provisional, MVE, ambiguous, unsettled, or differently shaped events fail the run.
+`yes` or `no`. The archived-market schema may omit `is_provisional`, `mve_collection_ticker`, and
+`fee_waiver_expiration_time`; omission is accepted only because the exact series filter, non-MVE ticker identity,
+binary shape, and final settlement result remain present. If any of those optional fields is present, require
+`is_provisional=false`, null/empty MVE identity, and null fee waiver. Duplicate, explicitly provisional, MVE,
+ambiguous, unsettled, or differently shaped events fail the run.
 
 For that top contract request one 60-minute historical candle whose `end_period_ts` is exactly `20:00:00Z` on the
 calendar date before the market date. The decision quote is the exact finite `yes_bid.close`; the submitted NO limit is
@@ -90,7 +94,9 @@ The family passes its initial evidence decision only if every condition holds:
    cost are reported as non-guaranteed research projections only.
 
 The earlier `daily_high_top_tail_market_implied_no_v1` draft is superseded before any evaluation-series request because
-it mislabeled the provider multiplier as the base coefficient. It receives no data or decision credit.
+it mislabeled the provider multiplier as the base coefficient. The v2 draft is likewise superseded before evaluation
+because it required three optional current-market fields that the historical-market source omits. Neither receives
+data or decision credit.
 
 The 250-date clustered-95 scale gate is necessarily false in this 100-date evaluation and must be reported false. A
 pass permits only a separate reviewed Stage 1 cohort and capital-risk decision. It does not authorize a recommendation,
