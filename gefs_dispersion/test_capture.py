@@ -1,4 +1,5 @@
 import datetime as dt
+import concurrent.futures
 import unittest
 
 import capture
@@ -14,6 +15,38 @@ def index_payload(initialization: dt.date, member: str) -> bytes:
 
 
 class CaptureTests(unittest.TestCase):
+    def test_bounded_results_never_retains_more_than_concurrency(self):
+        class ImmediateExecutor:
+            def __init__(self):
+                self.submitted = 0
+
+            def submit(self, worker, *args):
+                self.submitted += 1
+                future = concurrent.futures.Future()
+                future.set_result(worker(*args))
+                return future
+
+        executor = ImmediateExecutor()
+        iterator = capture.bounded_results(
+            executor,
+            [(value,) for value in range(17)],
+            lambda value: value * 2,
+            3,
+        )
+        yielded = 0
+        values = []
+        for item, result in iterator:
+            yielded += 1
+            values.append((item, result))
+            self.assertLessEqual(executor.submitted - yielded, 3)
+        self.assertEqual(executor.submitted, 17)
+        self.assertEqual(sorted(values), [((value,), value * 2) for value in range(17)])
+
+    def test_bounded_results_rejects_invalid_concurrency(self):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            with self.assertRaisesRegex(ValueError, "positive"):
+                list(capture.bounded_results(executor, [], lambda: None, 0))
+
     def test_frozen_calendar_and_key_are_exact(self):
         targets, evaluation = capture.frozen_dates()
         self.assertEqual((len(targets), targets[0], targets[-1]), (370, dt.date(2018, 12, 27), dt.date(2019, 12, 31)))

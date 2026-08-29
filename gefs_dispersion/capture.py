@@ -180,6 +180,42 @@ def fetch_member(budget: RequestBudget, initialization: dt.date, member: str) ->
     }
 
 
+def bounded_results(
+    executor: concurrent.futures.Executor,
+    items: list[tuple[object, ...]],
+    worker: object,
+    concurrency: int,
+):
+    """Yield completed work while retaining no more than the declared concurrency."""
+    if concurrency <= 0:
+        raise ValueError("Bounded GEFS concurrency must be positive.")
+    if not callable(worker):
+        raise ValueError("Bounded GEFS worker must be callable.")
+    iterator = iter(items)
+    pending: dict[concurrent.futures.Future[object], tuple[object, ...]] = {}
+
+    def submit_one() -> bool:
+        try:
+            item = next(iterator)
+        except StopIteration:
+            return False
+        pending[executor.submit(worker, *item)] = item
+        return True
+
+    for _ in range(min(concurrency, len(items))):
+        submit_one()
+    while pending:
+        completed, _ = concurrent.futures.wait(
+            tuple(pending),
+            return_when=concurrent.futures.FIRST_COMPLETED,
+        )
+        for future in completed:
+            item = pending.pop(future)
+            result = future.result()
+            yield item, result
+            submit_one()
+
+
 def decode_member(source: dict[str, object], stations: list[dict[str, object]]) -> dict[str, object]:
     import eccodes
 
@@ -427,13 +463,12 @@ def main() -> None:
             if not valid_existing_row(path, initialization, member):
                 tasks.append((initialization, member, path))
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as executor:
-        futures = {
-            executor.submit(fetch_member, budget, initialization, member): (initialization, member, path)
-            for initialization, member, path in tasks
-        }
-        for future in concurrent.futures.as_completed(futures):
-            initialization, member, path = futures[future]
-            row = decode_member(future.result(), stations)
+        fetch_items = [(budget, initialization, member) for initialization, member, _ in tasks]
+        targets = {(initialization, member): path for initialization, member, path in tasks}
+        for item, source in bounded_results(executor, fetch_items, fetch_member, args.concurrency):
+            _, initialization, member = item
+            path = targets[(initialization, member)]
+            row = decode_member(source, stations)
             encoded = (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode()
             create_once(path, encoded)
             print(json.dumps({"captured": f"{initialization}/{member}", "requests": budget.used}), flush=True)
