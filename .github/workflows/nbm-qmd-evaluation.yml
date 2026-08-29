@@ -1,0 +1,79 @@
+name: Isolated public NOAA NBM QMD evaluation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-public-noaa-nbm-qmd-v1
+  cancel-in-progress: false
+
+jobs:
+  evaluation:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.9.2
+      - name: Verify frozen package and structural tests
+        working-directory: nbm_qmd
+        run: |
+          sha256sum -c SHA256SUMS.frozen
+          python3 -m unittest -v test_workflow.py
+          deno cache --frozen --lock=deno.lock \
+            scripts/evaluate-noaa-nbm-qmd-calibration.ts \
+            scripts/evaluate-noaa-nbm-qmd-calibration_test.ts
+          deno fmt --check \
+            scripts/evaluate-noaa-nbm-qmd-calibration.ts \
+            scripts/evaluate-noaa-nbm-qmd-calibration_test.ts \
+            scripts/nbm-qmd-constants.ts \
+            server/core/decimal.ts server/core/json.ts server/core/statistics.ts
+          deno check \
+            scripts/evaluate-noaa-nbm-qmd-calibration.ts \
+            scripts/evaluate-noaa-nbm-qmd-calibration_test.ts
+          deno test --cached-only --no-prompt \
+            scripts/evaluate-noaa-nbm-qmd-calibration_test.ts
+      - name: Initialize immutable public run manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-nbm-qmd-public
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"noaa_nbm_qmd_public_evaluation_run_v1",run_id:$run_id,head_sha:$head_sha,identity:"noaa_nbm_v5_qmd_station_max_t_percentiles_v1",private_source_sha:"11151cddfb49ffc7319ecf15cbbc8d1f881df274",predeclaration_sha256:"22a5b0245bf78d960f1443e4fb786cdbbc77bced5746871e5383f1e225380536",research_only:true,active_trading_capability_changed:false,automatic_production_activation:false}' \
+            > "$root/run.json"
+      - name: Run frozen evaluator exactly once without network permission
+        working-directory: nbm_qmd
+        run: |
+          deno run --cached-only --no-prompt \
+            --allow-read=inputs \
+            --allow-write=/tmp/mimir-nbm-qmd-public \
+            scripts/evaluate-noaa-nbm-qmd-calibration.ts -- \
+              --input inputs/33155927949.json \
+              --input inputs/33156510785.json \
+              --input inputs/33156512445.json \
+              --input inputs/33156598208.json \
+              --output /tmp/mimir-nbm-qmd-public/evaluation.json
+          jq '{schema,research_only,active_trading_capability_changed,automatic_production_activation,design,model}' \
+            /tmp/mimir-nbm-qmd-public/evaluation.json
+      - name: Seal and upload immutable evaluation
+        if: always()
+        run: |
+          root=/tmp/mimir-nbm-qmd-public
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: noaa-nbm-qmd-public-evaluation-${{ github.run_id }}
+          path: /tmp/mimir-nbm-qmd-public
+          if-no-files-found: error
+          retention-days: 1
