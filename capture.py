@@ -34,6 +34,11 @@ FORECAST_MODEL = "noaa_nam_v4_station_mos_n_x"
 DUPLICATE_COMPARE_FIELDS: set[str] | None = None
 EXPECTED_EXACT_DUPLICATES_PER_STATION: int | None = 1
 REQUIRE_GLOBAL_OPTIONAL_SCHEMA = True
+EXPECTED_CALIBRATION_DATES = 145
+EXPECTED_EVALUATION_DATES = 250
+EXPECTED_STATION_COUNT = 20
+EXPECTED_NETWORK_REQUESTS = 23
+SOURCE_FILE_PREFIX = "iem-nam-mos"
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,15 +85,19 @@ def date_range(start: dt.date, end: dt.date) -> list[str]:
 def frozen_dates() -> tuple[list[str], list[str]]:
     calibration = date_range(CALIBRATION_START, CALIBRATION_END)
     evaluation = date_range(EVALUATION_START, EVALUATION_END)
-    if len(calibration) != 145 or len(evaluation) != 250 or calibration[-1] >= evaluation[0]:
+    if (
+        len(calibration) != EXPECTED_CALIBRATION_DATES
+        or len(evaluation) != EXPECTED_EVALUATION_DATES
+        or calibration[-1] >= evaluation[0]
+    ):
         raise ValueError("Frozen date identity is invalid.")
     return calibration, evaluation
 
 
 class RequestBudget:
     def __init__(self, maximum: int):
-        if maximum < 23 or maximum > 23:
-            raise ValueError("The frozen request budget is exactly 23.")
+        if maximum != EXPECTED_NETWORK_REQUESTS:
+            raise ValueError(f"The frozen request budget is exactly {EXPECTED_NETWORK_REQUESTS}.")
         self.maximum = maximum
         self.used = 0
         self.lock = threading.Lock()
@@ -223,7 +232,9 @@ def parse_isd(payload: bytes, stations: list[dict[str, object]]) -> list[dict[st
         if not matches:
             raise ValueError(f"NOAA ISD has no exact identity for {station['station_id']}.")
         selected = matches[0]
-        if selected["BEGIN"] > "20210215" or selected["END"] < "20220316":
+        required_begin = CALIBRATION_START.strftime("%Y%m%d")
+        required_end = EVALUATION_END.strftime("%Y%m%d")
+        if selected["BEGIN"] > required_begin or selected["END"] < required_end:
             raise ValueError(f"NOAA ISD identity does not cover the frozen window for {station['station_id']}.")
         if abs(float(selected["LAT"]) - float(station["latitude"])) > 0.2 or abs(float(selected["LON"]) - float(station["longitude"])) > 0.2:
             raise ValueError(f"NOAA ISD coordinates conflict for {station['station_id']}.")
@@ -238,7 +249,7 @@ def parse_isd(payload: bytes, stations: list[dict[str, object]]) -> list[dict[st
             "history_begin": selected["BEGIN"],
             "history_end": selected["END"],
         })
-    if len({row["ghcn_station_id"] for row in identities}) != 20:
+    if len({row["ghcn_station_id"] for row in identities}) != EXPECTED_STATION_COUNT:
         raise ValueError("NOAA station mapping is not one-to-one.")
     return identities
 
@@ -307,8 +318,12 @@ def main() -> None:
     if file_sha256(station_path) != STATIONS_SHA256:
         raise ValueError("Frozen station inventory hash is invalid.")
     stations = json.loads(station_path.read_text(encoding="utf-8"))
-    if not isinstance(stations, list) or len(stations) != 20 or len({row.get("station_id") for row in stations}) != 20:
-        raise ValueError("Frozen station inventory must contain 20 unique stations.")
+    if (
+        not isinstance(stations, list)
+        or len(stations) != EXPECTED_STATION_COUNT
+        or len({row.get("station_id") for row in stations}) != EXPECTED_STATION_COUNT
+    ):
+        raise ValueError(f"Frozen station inventory must contain {EXPECTED_STATION_COUNT} unique stations.")
     calibration_dates, evaluation_dates = frozen_dates()
     all_dates = calibration_dates + evaluation_dates
     budget = RequestBudget(args.max_requests)
@@ -320,8 +335,8 @@ def main() -> None:
         station_id = str(station["station_id"])
         url = mos_url(station_id)
         payload, headers = fetch(url, budget)
-        create_once(output_dir / "raw" / f"iem-nam-mos-{station_id}.csv", payload)
-        atomic_json(output_dir / "raw" / f"iem-nam-mos-{station_id}.headers.json", headers)
+        create_once(output_dir / "raw" / f"{SOURCE_FILE_PREFIX}-{station_id}.csv", payload)
+        atomic_json(output_dir / "raw" / f"{SOURCE_FILE_PREFIX}-{station_id}.headers.json", headers)
         rows, fieldnames, exact_duplicate_count = parse_mos(payload, station_id, all_dates)
         require_exact_duplicate_identity(station_id, exact_duplicate_count)
         if mos_schema is None:
@@ -342,8 +357,9 @@ def main() -> None:
             "selected_exact_duplicate_count": exact_duplicate_count,
         })
         print(json.dumps({"forecast_station": station_id, "completed_stations": index, "network_requests": budget.used}, sort_keys=True), flush=True)
-    if len(forecasts) != 7900:
-        raise ValueError("Complete forecast coverage must contain exactly 7,900 station/dates.")
+    expected_rows = (EXPECTED_CALIBRATION_DATES + EXPECTED_EVALUATION_DATES) * EXPECTED_STATION_COUNT
+    if len(forecasts) != expected_rows:
+        raise ValueError(f"Complete forecast coverage must contain exactly {expected_rows} station/dates.")
 
     isd_payload, isd_headers = fetch(ISD_URL, budget)
     create_once(output_dir / "raw" / "noaa-isd-history.csv", isd_payload)
@@ -387,7 +403,7 @@ def main() -> None:
         "production_database_accessed": False,
         "credential_required": False,
         "historical_price_data_inspected": False,
-        "request_policy": {"no_retry": True, "stop_on_http_429": True, "maximum_requests": 23, "actual_network_requests": budget.used},
+        "request_policy": {"no_retry": True, "stop_on_http_429": True, "maximum_requests": EXPECTED_NETWORK_REQUESTS, "actual_network_requests": budget.used},
         "design": {
             "forecast_model": FORECAST_MODEL,
             "source_model": SOURCE_MODEL,
@@ -402,7 +418,7 @@ def main() -> None:
             "evaluation_first_date": evaluation_dates[0],
             "evaluation_last_date": evaluation_dates[-1],
             "evaluation_dates": len(evaluation_dates),
-            "station_count": 20,
+            "station_count": EXPECTED_STATION_COUNT,
         },
         "coverage": {
             "requested_dates": 395,

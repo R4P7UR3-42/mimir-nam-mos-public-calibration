@@ -9,6 +9,7 @@ or order APIs. A passing result would justify only a separate reviewed current-m
 decision.
 
 The original NAM one-shot run terminated on a frozen source-schema gate before outcomes were acquired. See
-[`RESULT.md`](RESULT.md) for that checksum-bound rejection. The current independent experiment is the materially
-distinct [GFS MOS station rolling Wilson-90 calibration](gfs_mos/PREDECLARATION.md); it uses a frozen 250-date
-evaluation and does not access historical market prices unless every forecast-calibration gate passes.
+[`RESULT.md`](RESULT.md) for that checksum-bound rejection. The materially distinct
+[GFS MOS station rolling Wilson-90 calibration](gfs_mos/RESULT.md) passed every frozen gate on 250 independent dates.
+Its unchanged model is now frozen for a separate [180-date executable-price OOS evaluation](gfs_mos_price/PREDECLARATION.md)
+with exact fees and public trade evidence. That evaluation remains research-only and cannot place an order.
