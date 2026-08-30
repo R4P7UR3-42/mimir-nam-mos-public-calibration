@@ -38,3 +38,16 @@ client. No fee, market, candle, or trade request occurred.
 The bounded correction derives both coverage fields from the exact profile date list. Parent coverage remains 395;
 economic coverage becomes 301. It changes no source row, model, score, market window, price, fee, fill, statistical,
 economic, or authority rule.
+
+## Exact historical-cutoff boundary correction
+
+Replacement run
+[33284399090](https://github.com/R4P7UR3-42/mimir-nam-mos-public-calibration/actions/runs/33284399090)
+passed the complete corrected source capture and all ten unchanged fee identities. Kalshi's public cutoff was exactly
+`2026-06-30T00:00:00Z`, equal to the frozen June 28 market date plus the conservative two-day settlement boundary. The
+reader incorrectly required it to be strictly later and stopped before requesting an event inventory, candle, or
+trade.
+
+Exact equality is complete historical coverage and now passes; `2026-06-29T23:59:59.999999Z` and anything earlier fail.
+The trade cutoff remains required strictly after the final five-minute decision window. This changes no market date,
+contract, score, quote, fee, fill, statistical, economic, or authority rule.

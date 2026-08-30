@@ -25,7 +25,7 @@ jobs:
           test "$(sha256sum gfs_mos_price/PREDECLARATION.md | cut -d' ' -f1)" = 57e0b81fcf181e081dd554bfa04143aae6d26b7a54bbf849039e1114c8af54ea
           test "$(sha256sum gfs_mos_price/stations.json | cut -d' ' -f1)" = 4b1d30b1feda203d0b7b482778104a98be475ed6ec73bc64e3da9bf130154558
           test "$(sha256sum gfs_mos/RESULT.md | cut -d' ' -f1)" = 2cdd2079394f6a3da426f90133fd0e69dc26e4015455f0edc355d78e835d0f62
-          test "$(sha256sum gfs_mos_price/SOURCE_CONTRACT_ADDENDUM.md | cut -d' ' -f1)" = efb9f2a1b02e158b179f900bf6c102c339eea1c1059bbd051d6efb61a62f8d4f
+          test "$(sha256sum gfs_mos_price/SOURCE_CONTRACT_ADDENDUM.md | cut -d' ' -f1)" = 95d611b3715410c7ada6d571a35626e9c869408256372775905ba23da23d988f
           python3 -m unittest -v test_capture.py test_evaluate.py test_workflow.py
           python3 -m unittest -v gfs_mos.test_gfs_profile gfs_mos.test_workflow
           python3 -m unittest -v gfs_mos_price.test_executable gfs_mos_price.test_workflow

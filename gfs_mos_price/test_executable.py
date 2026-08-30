@@ -162,6 +162,17 @@ class ExecutableTest(unittest.TestCase):
         self.assertGreaterEqual(Decimal("0.0150"), executable.MIN_EDGE)
         self.assertLess(Decimal("0.0149"), executable.MIN_EDGE)
 
+    def test_exact_historical_cutoff_boundary_passes_and_immediately_earlier_fails(self) -> None:
+        executable.validate_historical_cutoffs({
+            "market_settled_ts": "2026-06-30T00:00:00Z",
+            "trades_created_ts": "2026-06-30T00:00:00Z",
+        })
+        with self.assertRaisesRegex(ValueError, "market cutoff"):
+            executable.validate_historical_cutoffs({
+                "market_settled_ts": "2026-06-29T23:59:59.999999Z",
+                "trades_created_ts": "2026-06-30T00:00:00Z",
+            })
+
 
 if __name__ == "__main__":
     unittest.main()
