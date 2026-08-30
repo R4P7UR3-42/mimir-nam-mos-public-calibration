@@ -1,0 +1,81 @@
+name: Isolated GFS MOS executable OOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-public-gfs-mos-executable-oos-v1
+  cancel-in-progress: false
+
+jobs:
+  evaluation:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Verify frozen identities and tests
+        run: |
+          test "$(sha256sum gfs_mos_price/PREDECLARATION.md | cut -d' ' -f1)" = 57e0b81fcf181e081dd554bfa04143aae6d26b7a54bbf849039e1114c8af54ea
+          test "$(sha256sum gfs_mos_price/stations.json | cut -d' ' -f1)" = 4b1d30b1feda203d0b7b482778104a98be475ed6ec73bc64e3da9bf130154558
+          test "$(sha256sum gfs_mos/RESULT.md | cut -d' ' -f1)" = 2cdd2079394f6a3da426f90133fd0e69dc26e4015455f0edc355d78e835d0f62
+          python3 -m unittest -v test_capture.py test_evaluate.py test_workflow.py
+          python3 -m unittest -v gfs_mos.test_gfs_profile gfs_mos.test_workflow
+          python3 -m unittest -v gfs_mos_price.test_executable gfs_mos_price.test_workflow
+      - name: Initialize immutable run manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-gfs-mos-executable-oos
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"gfs_mos_executable_oos_run_v1",run_id:$run_id,head_sha:$head_sha,identity:"gfs_mos_station_rolling_wilson90_executable_no_oos_v1",predeclaration_sha256:"57e0b81fcf181e081dd554bfa04143aae6d26b7a54bbf849039e1114c8af54ea",research_only:true,active_trading_capability_changed:false,historical_price_data_inspected:false}' \
+            > "$root/run.json"
+      - name: Capture complete GFS and NOAA source evidence before prices
+        id: source
+        continue-on-error: true
+        run: |
+          timeout --signal=TERM --kill-after=30s 15m \
+            python3 gfs_mos_price/capture_source.py \
+              --stations gfs_mos_price/stations.json \
+              --output-dir /tmp/mimir-gfs-mos-executable-oos/source \
+              --max-requests 13
+          jq '{schema,model_identity,request_policy,design,coverage,historical_price_data_inspected}' \
+            /tmp/mimir-gfs-mos-executable-oos/source/capture.json
+      - name: Evaluate frozen prices fees and public fills exactly once
+        id: evaluation
+        if: steps.source.outcome == 'success'
+        continue-on-error: true
+        run: |
+          timeout --signal=TERM --kill-after=30s 70m \
+            python3 gfs_mos_price/evaluate_executable.py \
+              --capture /tmp/mimir-gfs-mos-executable-oos/source/capture.json \
+              --output-dir /tmp/mimir-gfs-mos-executable-oos/evaluation \
+              --max-requests 12000
+          jq '{schema,identity,network_policy,support_funnel,evaluation:(.evaluation|del(.selections)),quote_rows_count:(.quote_rows|length)}' \
+            /tmp/mimir-gfs-mos-executable-oos/evaluation/report.json
+      - name: Write portable checksums
+        if: always()
+        run: |
+          root=/tmp/mimir-gfs-mos-executable-oos
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gfs-mos-executable-oos-${{ github.run_id }}
+          path: /tmp/mimir-gfs-mos-executable-oos
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal source or evaluation failure
+        if: always() && (steps.source.outcome != 'success' || steps.evaluation.outcome != 'success')
+        run: exit 1
