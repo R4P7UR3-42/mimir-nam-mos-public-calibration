@@ -17,3 +17,7 @@ trades, `-$0.4169` exact-fee P&L, adverse Brier skill, and a negative clustered 
 The materially distinct [daily low-temperature market calibration](low_market_development/RESULT.md) also terminated in
 training. All eight predeclared tail/price cells had negative multiple-testing-adjusted exact-fee lower returns; its
 reserved evaluation stations remain untouched. No OOS workflow or trading authority is permitted for that identity.
+
+The [GFS MOS precipitation development](gfs_mos_precipitation/DEVELOPMENT.md) is a credential-free, training-only
+screen of a distinct daily no-rain model. It binds exact prior-day public MOS forecasts to NOAA precipitation outcomes,
+treats trace precipitation as rain, and reserves 250 later dates untouched. It creates no trading authority.
