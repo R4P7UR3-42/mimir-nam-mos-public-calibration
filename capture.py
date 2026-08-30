@@ -29,6 +29,11 @@ CALIBRATION_END = dt.date(2021, 7, 9)
 EVALUATION_START = dt.date(2021, 7, 10)
 EVALUATION_END = dt.date(2022, 3, 16)
 REQUIRED_MOS_FIELDS = {"runtime", "ftime", "model", "n_x", "station"}
+SOURCE_MODEL = "NAM"
+FORECAST_MODEL = "noaa_nam_v4_station_mos_n_x"
+DUPLICATE_COMPARE_FIELDS: set[str] | None = None
+EXPECTED_EXACT_DUPLICATES_PER_STATION: int | None = 1
+REQUIRE_GLOBAL_OPTIONAL_SCHEMA = True
 
 
 def parse_args() -> argparse.Namespace:
@@ -124,7 +129,7 @@ def mos_url(station_id: str) -> str:
     last_runtime = EVALUATION_END - dt.timedelta(days=1)
     query = urllib.parse.urlencode({
         "station": station_id,
-        "model": "NAM",
+        "model": SOURCE_MODEL,
         "year1": first_runtime.year,
         "month1": first_runtime.month,
         "day1": first_runtime.day,
@@ -150,7 +155,7 @@ def parse_mos(
     exact_duplicate_count = 0
     desired = set(desired_dates)
     for row in reader:
-        if row.get("station") != station_id or row.get("model") != "NAM":
+        if row.get("station") != station_id or row.get("model") != SOURCE_MODEL:
             raise ValueError(f"IEM MOS identity drifted for {station_id}.")
         try:
             runtime = dt.datetime.strptime(row["runtime"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc)
@@ -167,7 +172,8 @@ def parse_mos(
             raise ValueError(f"IEM MOS maximum temperature is missing for {station_id}|{market_date}.")
         key = (station_id, market_date)
         if key in wanted:
-            if any(row.get(field) != wanted[key].get(field) for field in fieldnames):
+            compare_fields = fieldnames if DUPLICATE_COMPARE_FIELDS is None else tuple(sorted(DUPLICATE_COMPARE_FIELDS))
+            if any(row.get(field) != wanted[key].get(field) for field in compare_fields):
                 raise ValueError(f"IEM MOS maximum temperature has a conflicting duplicate for {station_id}|{market_date}.")
             exact_duplicate_count += 1
             continue
@@ -184,7 +190,7 @@ def parse_mos(
     return [{
         "station_id": station_id,
         "market_date": market_date,
-        "forecast_model": "noaa_nam_v4_station_mos_n_x",
+        "forecast_model": FORECAST_MODEL,
         "forecast_initialized_at": f"{dt.date.fromisoformat(market_date) - dt.timedelta(days=1)}T12:00:00Z",
         "forecast_available_by": f"{dt.date.fromisoformat(market_date) - dt.timedelta(days=1)}T20:00:00Z",
         "forecast_time": f"{dt.date.fromisoformat(market_date) + dt.timedelta(days=1)}T00:00:00Z",
@@ -193,7 +199,10 @@ def parse_mos(
 
 
 def require_exact_duplicate_identity(station_id: str, exact_duplicate_count: int) -> None:
-    if exact_duplicate_count != 1:
+    if exact_duplicate_count < 0 or (
+        EXPECTED_EXACT_DUPLICATES_PER_STATION is not None
+        and exact_duplicate_count != EXPECTED_EXACT_DUPLICATES_PER_STATION
+    ):
         raise ValueError(
             f"IEM MOS exact duplicate identity is invalid for {station_id}: {exact_duplicate_count}."
         )
@@ -317,7 +326,7 @@ def main() -> None:
         require_exact_duplicate_identity(station_id, exact_duplicate_count)
         if mos_schema is None:
             mos_schema = fieldnames
-        elif fieldnames != mos_schema:
+        elif REQUIRE_GLOBAL_OPTIONAL_SCHEMA and fieldnames != mos_schema:
             raise ValueError(f"IEM MOS bulk schemas conflict at {station_id}.")
         for row in rows:
             key = (str(row["station_id"]), str(row["market_date"]))
@@ -380,11 +389,13 @@ def main() -> None:
         "historical_price_data_inspected": False,
         "request_policy": {"no_retry": True, "stop_on_http_429": True, "maximum_requests": 23, "actual_network_requests": budget.used},
         "design": {
-            "forecast_model": "noaa_nam_v4_station_mos_n_x",
+            "forecast_model": FORECAST_MODEL,
+            "source_model": SOURCE_MODEL,
             "forecast_runtime_utc": "12:00:00",
             "forecast_available_by_utc": "20:00:00",
             "duplicate_policy": "collapse_only_identical_semantic_selected_row",
-            "selected_exact_duplicates_per_station": 1,
+            "selected_exact_duplicates_per_station": EXPECTED_EXACT_DUPLICATES_PER_STATION,
+            "global_optional_schema_required": REQUIRE_GLOBAL_OPTIONAL_SCHEMA,
             "calibration_first_date": calibration_dates[0],
             "calibration_last_date": calibration_dates[-1],
             "calibration_dates": len(calibration_dates),
