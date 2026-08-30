@@ -25,3 +25,16 @@ must still require:
 
 An ISD `END` of `20250824`, missing or ambiguous ICAO/WBAN, coordinate drift, incomplete NCEI coverage, or any other
 source error remains terminal. The replacement run remains price-blind until this complete source contract passes.
+
+## Complete-source serialization correction
+
+Replacement run
+[33284302603](https://github.com/R4P7UR3-42/mimir-nam-mos-public-calibration/actions/runs/33284302603)
+then completed the corrected 13-request source contract, including all 3,010 rows. The shared capture report serialized
+the profile-independent literals `requested_dates=395` and `complete_dates=395` left from the parent 20-station
+calibration, so the economic reader rejected the otherwise complete 301-date capture before constructing a Kalshi
+client. No fee, market, candle, or trade request occurred.
+
+The bounded correction derives both coverage fields from the exact profile date list. Parent coverage remains 395;
+economic coverage becomes 301. It changes no source row, model, score, market window, price, fee, fill, statistical,
+economic, or authority rule.

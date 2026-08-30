@@ -27,7 +27,7 @@ from nbm_q90_price import evaluate as market  # noqa: E402
 SCHEMA = "gfs_mos_station_rolling_wilson90_executable_no_oos_evaluation_v1"
 IDENTITY = "gfs_mos_station_rolling_wilson90_executable_no_oos_v1"
 PARENT_RESULT_SHA256 = "2cdd2079394f6a3da426f90133fd0e69dc26e4015455f0edc355d78e835d0f62"
-SOURCE_ADDENDUM_SHA256 = "e6d839ebc2ca7830e23d7d44935ea73e421ab4ae919a8eaac27c2b89a10bd1bf"
+SOURCE_ADDENDUM_SHA256 = "efb9f2a1b02e158b179f900bf6c102c339eea1c1059bbd051d6efb61a62f8d4f"
 START = dt.date(2025, 12, 31)
 END = dt.date(2026, 6, 28)
 NETWORK_LIMIT = 12_000
