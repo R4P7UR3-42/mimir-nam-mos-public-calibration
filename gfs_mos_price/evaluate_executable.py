@@ -27,6 +27,7 @@ from nbm_q90_price import evaluate as market  # noqa: E402
 SCHEMA = "gfs_mos_station_rolling_wilson90_executable_no_oos_evaluation_v1"
 IDENTITY = "gfs_mos_station_rolling_wilson90_executable_no_oos_v1"
 PARENT_RESULT_SHA256 = "2cdd2079394f6a3da426f90133fd0e69dc26e4015455f0edc355d78e835d0f62"
+SOURCE_ADDENDUM_SHA256 = "e6d839ebc2ca7830e23d7d44935ea73e421ab4ae919a8eaac27c2b89a10bd1bf"
 START = dt.date(2025, 12, 31)
 END = dt.date(2026, 6, 28)
 NETWORK_LIMIT = 12_000
@@ -112,6 +113,8 @@ def load_capture(path: Path, stations: list[dict[str, object]]) -> dict[str, obj
             "duplicate_policy": "collapse_only_identical_semantic_selected_row",
             "selected_exact_duplicates_per_station": None,
             "global_optional_schema_required": False,
+            "isd_history_through_window_required": False,
+            "minimum_isd_history_end": "20250825",
             "calibration_first_date": "2025-09-01",
             "calibration_last_date": "2025-12-30",
             "calibration_dates": 121,
@@ -468,6 +471,8 @@ def main() -> None:
     root = Path(__file__).resolve().parent
     if capture.file_sha256(root / "PREDECLARATION.md") != capture.PREDECLARATION_SHA256:
         raise ValueError("Frozen economic predeclaration hash is invalid.")
+    if capture.file_sha256(root / "SOURCE_CONTRACT_ADDENDUM.md") != SOURCE_ADDENDUM_SHA256:
+        raise ValueError("Frozen source-contract addendum hash is invalid.")
     if capture.file_sha256(root.parent / "gfs_mos" / "RESULT.md") != PARENT_RESULT_SHA256:
         raise ValueError("Passing parent result hash is invalid.")
     stations = load_stations()
@@ -536,6 +541,7 @@ def main() -> None:
         "predeclaration_sha256": capture.PREDECLARATION_SHA256,
         "stations_sha256": capture.STATIONS_SHA256,
         "parent_result_sha256": PARENT_RESULT_SHA256,
+        "source_contract_addendum_sha256": SOURCE_ADDENDUM_SHA256,
         "source_capture_sha256": capture.file_sha256(source_path),
         "research_only": True,
         "active_trading_capability_changed": False,

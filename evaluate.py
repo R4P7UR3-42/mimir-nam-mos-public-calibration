@@ -140,6 +140,8 @@ def load_capture(path: Path) -> dict[str, object]:
         "duplicate_policy": "collapse_only_identical_semantic_selected_row",
         "selected_exact_duplicates_per_station": capture.EXPECTED_EXACT_DUPLICATES_PER_STATION,
         "global_optional_schema_required": capture.REQUIRE_GLOBAL_OPTIONAL_SCHEMA,
+        "isd_history_through_window_required": capture.REQUIRE_ISD_HISTORY_THROUGH_WINDOW,
+        "minimum_isd_history_end": capture.MINIMUM_ISD_HISTORY_END,
         "calibration_first_date": "2021-02-15",
         "calibration_last_date": "2021-07-09",
         "calibration_dates": 145,

@@ -26,3 +26,5 @@ def configure(capture_module) -> None:
     capture_module.EXPECTED_STATION_COUNT = 10
     capture_module.EXPECTED_NETWORK_REQUESTS = 13
     capture_module.SOURCE_FILE_PREFIX = "iem-gfs-mos"
+    capture_module.REQUIRE_ISD_HISTORY_THROUGH_WINDOW = False
+    capture_module.MINIMUM_ISD_HISTORY_END = "20250825"
