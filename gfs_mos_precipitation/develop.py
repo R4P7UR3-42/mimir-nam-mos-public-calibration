@@ -22,12 +22,13 @@ from zoneinfo import ZoneInfo
 
 getcontext().prec = 40
 ROOT = Path(__file__).resolve().parents[1]
-IDENTITY = "gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v2"
+IDENTITY = "gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v3"
 SCHEMA = "gfs_mos_precipitation_development_v1"
-DEVELOPMENT_SHA256 = "cd185e6f21a7f40f20f46c2b84a56fbbd3c2e80e6663a063b4b61490748c9641"
+DEVELOPMENT_SHA256 = "2ada86d21352f536931dfdf53a7eb019960fb2d75aae15eb5a7a0773fb28bcc4"
 STATIONS_SHA256 = "297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12"
 IEM_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/mos.py"
 ISD_URL = "https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv"
+GHCND_INVENTORY_URL = "https://www.ncei.noaa.gov/pub/data/ghcn/daily/ghcnd-inventory.txt"
 NCEI_URL = "https://www.ncei.noaa.gov/access/services/data/v1"
 HISTORY_START = dt.date(2024, 1, 1)
 HISTORY_END = dt.date(2024, 12, 31)
@@ -39,7 +40,7 @@ EXPECTED_HISTORY_DATES = 366
 EXPECTED_DEVELOPMENT_DATES = 327
 EXPECTED_RESERVED_DATES = 250
 EXPECTED_STATIONS = 20
-EXPECTED_REQUESTS = 23
+EXPECTED_REQUESTS = 24
 REQUIRED_MOS_FIELDS = {"runtime", "ftime", "model", "p06", "station"}
 SOURCE_MODEL = "GFS"
 FORECAST_MODEL = "noaa_gfs_station_mos_p06_local_day_v1"
@@ -291,8 +292,8 @@ def parse_isd(payload: bytes, stations: list[dict[str, object]]) -> list[dict[st
         if not matches:
             raise ValueError(f"NOAA ISD has no exact identity for {station_id}.")
         selected = matches[0]
-        if selected["BEGIN"] > HISTORY_START.strftime("%Y%m%d") or selected["END"] < DEVELOPMENT_END.strftime("%Y%m%d"):
-            raise ValueError(f"NOAA ISD identity does not cover the frozen window for {station_id}.")
+        if selected["BEGIN"] > DEVELOPMENT_END.strftime("%Y%m%d") or selected["END"] < HISTORY_START.strftime("%Y%m%d"):
+            raise ValueError(f"NOAA ISD identity does not overlap the frozen window for {station_id}.")
         if (
             abs(float(selected["LAT"]) - float(station["latitude"])) > 0.2
             or abs(float(selected["LON"]) - float(station["longitude"])) > 0.2
@@ -309,9 +310,58 @@ def parse_isd(payload: bytes, stations: list[dict[str, object]]) -> list[dict[st
             "history_begin": selected["BEGIN"],
             "history_end": selected["END"],
         })
-    if len(identities) != EXPECTED_STATIONS or len({row["ghcn_station_id"] for row in identities}) != EXPECTED_STATIONS:
+    if len(identities) != len(stations) or len({row["ghcn_station_id"] for row in identities}) != len(stations):
         raise ValueError("NOAA station mapping is not one-to-one.")
     return identities
+
+
+def parse_ghcnd_inventory(
+    payload: bytes,
+    identities: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    expected = {str(identity["ghcn_station_id"]): identity for identity in identities}
+    matched: dict[str, dict[str, object]] = {}
+    try:
+        lines = payload.decode("ascii").splitlines()
+    except UnicodeDecodeError as error:
+        raise ValueError("NOAA GHCN element inventory is not ASCII.") from error
+    for line in lines:
+        parts = line.split()
+        if not parts or parts[0] not in expected or len(parts) < 4 or parts[3] != "PRCP":
+            continue
+        if len(parts) != 6:
+            raise ValueError(f"NOAA GHCN PRCP inventory row is malformed for {parts[0]}.")
+        station_id, latitude_raw, longitude_raw, element, first_raw, last_raw = parts
+        if station_id in matched:
+            raise ValueError(f"NOAA GHCN PRCP inventory is duplicated for {station_id}.")
+        try:
+            latitude = float(latitude_raw)
+            longitude = float(longitude_raw)
+            first_year = int(first_raw)
+            last_year = int(last_raw)
+        except ValueError as error:
+            raise ValueError(f"NOAA GHCN PRCP inventory is malformed for {station_id}.") from error
+        identity = expected[station_id]
+        if (
+            element != "PRCP"
+            or abs(latitude - float(identity["latitude"])) > 0.2
+            or abs(longitude - float(identity["longitude"])) > 0.2
+            or first_year > HISTORY_START.year
+            or last_year < DEVELOPMENT_END.year
+        ):
+            raise ValueError(f"NOAA GHCN PRCP inventory does not cover the frozen window for {station_id}.")
+        matched[station_id] = {
+            "ghcn_station_id": station_id,
+            "element": element,
+            "latitude": latitude,
+            "longitude": longitude,
+            "first_year": first_year,
+            "last_year": last_year,
+        }
+    missing = sorted(set(expected) - set(matched))
+    if missing or set(matched) != set(expected):
+        raise ValueError(f"NOAA GHCN PRCP inventory is incomplete: {missing[:5]}.")
+    return [matched[key] for key in sorted(matched)]
 
 
 def outcome_url(identities: list[dict[str, object]], start: dt.date, end: dt.date) -> str:
@@ -657,8 +707,15 @@ def main() -> None:
     create_once(output / "raw" / "noaa-isd-history.csv", isd_payload)
     atomic_json(output / "raw" / "noaa-isd-history.headers.json", isd_headers)
     identities = parse_isd(isd_payload, stations)
+    inventory_payload, inventory_headers = fetch(GHCND_INVENTORY_URL, budget)
+    create_once(output / "raw" / "noaa-ghcnd-inventory.txt", inventory_payload)
+    atomic_json(output / "raw" / "noaa-ghcnd-inventory.headers.json", inventory_headers)
+    element_inventories = parse_ghcnd_inventory(inventory_payload, identities)
     outcomes: dict[tuple[str, str], dict[str, object]] = {}
-    outcome_sources = [{"label": "identity", "url": ISD_URL, "sha256": sha256(isd_payload), "headers": isd_headers}]
+    outcome_sources = [
+        {"label": "identity", "url": ISD_URL, "sha256": sha256(isd_payload), "headers": isd_headers},
+        {"label": "element_inventory", "url": GHCND_INVENTORY_URL, "sha256": sha256(inventory_payload), "headers": inventory_headers},
+    ]
     for label, dates in (("history", history_dates), ("development", development_dates)):
         url = outcome_url(identities, dates[0], dates[-1])
         payload, headers = fetch(url, budget)
@@ -732,6 +789,7 @@ def main() -> None:
             "five_interval_rows": sum(len(row["selected_interval_ends_utc"]) == 5 for row in rows),
         },
         "station_identities": identities,
+        "station_element_inventories": element_inventories,
         "forecast_sources": forecast_sources,
         "outcome_sources": outcome_sources,
         "evaluation": result,

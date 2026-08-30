@@ -1,6 +1,6 @@
 # GFS MOS daily-precipitation development freeze
 
-- Identity: `gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v2`
+- Identity: `gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v3`
 - State: training/development only; no trading or production authority
 - Frozen history: 2024-01-01 through 2024-12-31
 - Frozen development targets: 2025-01-01 through 2025-11-23
@@ -24,15 +24,20 @@ forecast rows and later model history/targets. A station-specific missing runtim
 conflicting duplicate, wrong station/model/runtime, non-six-hour clock, out-of-range value, or incomplete local-day
 coverage within an existing runtime fails closed. Never substitute 00Z, 06Z, 18Z, or another date.
 
-Use exact NOAA NCEI Daily Summaries `PRCP` under a freshly captured ICAO/WBAN-to-GHCN identity. A nonzero value is rain.
-A zero value whose measurement flag is `T` is also rain; it must never be relabeled no-rain. Reject malformed attributes,
-nonblank quality flags, unsafe measurement flags, impossible values, duplicate identity, or incomplete coverage. NCEI is
-a model label proxy, not the Weather Company settlement source; even a positive result cannot establish exchange outcome
-agreement without later prospective official Kalshi settlements.
+Use ISD history only to bind the exact ICAO/WBAN-to-GHCN identity and coordinates. Do not use the aviation-history `END`
+field as an availability claim for another NOAA dataset. Independently require the freshly captured authoritative GHCN
+Daily element inventory to contain exactly one mapped `PRCP` row for every station, matching coordinates within 0.2
+degrees, beginning no later than the history year, and ending no earlier than the development year.
 
-The acquisition is credential-free, has exactly 23 requests (20 IEM, one ISD identity, and two NCEI outcome requests),
-has no retry, stops on HTTP 429, and refuses a production Mimir host. Persist raw response bytes, headers, URLs, hashes,
-the complete station/date rows, and a portable checksum manifest.
+Use exact NOAA NCEI Daily Summaries `PRCP` under that doubly checked identity. A nonzero value is rain. A zero value whose
+measurement flag is `T` is also rain; it must never be relabeled no-rain. Reject malformed attributes, nonblank quality
+flags, unsafe measurement flags, impossible values, duplicate identity, or incomplete coverage. NCEI is a model label
+proxy, not the Weather Company settlement source; even a positive result cannot establish exchange outcome agreement
+without later prospective official Kalshi settlements.
+
+The acquisition is credential-free, has exactly 24 requests (20 IEM, one ISD identity, one GHCN element inventory, and
+two NCEI outcome requests), has no retry, stops on HTTP 429, and refuses a production Mimir host. Persist raw response
+bytes, headers, URLs, hashes, the complete station/date rows, and a portable checksum manifest.
 
 ## Frozen model
 
@@ -84,7 +89,11 @@ terminal for this identity: do not inspect the reserved dates or retune against 
 ## Source-contract correction
 
 The first v1 exact-main run `33287841384` stopped before NOAA outcomes after KATL proved that the 2025-05-29 12Z GFS MOS
-runtime is entirely absent while all other 692 requested KATL runtimes are present. V2 makes only the global-outage rule
-above explicit. It does not inspect an outcome, change a model or gate, select the observed date by name, substitute a
-forecast, or access the reserved evaluation window. V1 remains a terminal source-contract artifact and receives no
-statistical credit.
+runtime is entirely absent while all other 692 requested KATL runtimes are present. V2 made only the global-outage rule
+above explicit. Exact-main v2 run `33287970484` then captured all 20 MOS sources and stopped before outcomes because the
+KATL ISD aviation-history segment ended on 2025-08-27. NOAA's distinct GHCN element inventory, checksum
+`a5fb1dfd2e9667d53925e53161acfe0e363079a9cc0b72c83984aacb4375e76a`, reports exact `PRCP` coverage through 2026 for
+all 20 mapped GHCN stations. V3 replaces only that cross-dataset availability inference with the authoritative inventory
+contract above. Neither correction inspects an outcome, changes a model or gate, selects the observed date by name,
+substitutes a forecast, or accesses the reserved evaluation window. V1 and v2 remain terminal source-contract artifacts
+and receive no statistical credit.

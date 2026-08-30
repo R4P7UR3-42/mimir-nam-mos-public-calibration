@@ -119,6 +119,35 @@ class DevelopTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsafe"):
             develop.parse_attributes("P,,W,2400", "KATL|2024-01-01")
 
+    def test_isd_mapping_may_end_before_development_when_it_overlaps_window(self) -> None:
+        header = ["USAF", "WBAN", "STATION NAME", "CTRY", "STATE", "ICAO", "LAT", "LON", "ELEV(M)", "BEGIN", "END"]
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=header)
+        writer.writeheader()
+        writer.writerow({
+            "USAF": "722190", "WBAN": "13874", "STATION NAME": "ATL", "CTRY": "US", "STATE": "GA",
+            "ICAO": "KATL", "LAT": "+33.630", "LON": "-084.442", "ELEV(M)": "308.2",
+            "BEGIN": "19730101", "END": "20250827",
+        })
+        identities = develop.parse_isd(buffer.getvalue().encode(), [STATION])
+        self.assertEqual(identities[0]["ghcn_station_id"], "USW00013874")
+        self.assertEqual(identities[0]["history_end"], "20250827")
+
+    def test_ghcnd_inventory_independently_attests_prcp_coverage(self) -> None:
+        identities = [{
+            "station_id": "KATL", "ghcn_station_id": "USW00013874", "station_name": "ATL",
+            "latitude": 33.630, "longitude": -84.442,
+        }]
+        parsed = develop.parse_ghcnd_inventory(
+            b"USW00013874  33.6297  -84.4422 PRCP 1930 2026\n", identities,
+        )
+        self.assertEqual(parsed[0]["element"], "PRCP")
+        self.assertEqual(parsed[0]["last_year"], 2026)
+        with self.assertRaisesRegex(ValueError, "does not cover"):
+            develop.parse_ghcnd_inventory(
+                b"USW00013874  33.6297  -84.4422 PRCP 1930 2024\n", identities,
+            )
+
     def test_exact_fee_and_adjacent_edge_boundary(self) -> None:
         self.assertEqual(develop.exact_fee(Decimal("0.70")), Decimal("0.0147"))
         threshold = Decimal("0.70") + Decimal("0.0147") + Decimal("0.015")
