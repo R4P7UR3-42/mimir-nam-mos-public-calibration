@@ -27,7 +27,7 @@ from nbm_q90_price import evaluate as market  # noqa: E402
 SCHEMA = "gfs_mos_station_rolling_wilson90_executable_no_oos_evaluation_v1"
 IDENTITY = "gfs_mos_station_rolling_wilson90_executable_no_oos_v1"
 PARENT_RESULT_SHA256 = "2cdd2079394f6a3da426f90133fd0e69dc26e4015455f0edc355d78e835d0f62"
-SOURCE_ADDENDUM_SHA256 = "efb9f2a1b02e158b179f900bf6c102c339eea1c1059bbd051d6efb61a62f8d4f"
+SOURCE_ADDENDUM_SHA256 = "95d611b3715410c7ada6d571a35626e9c869408256372775905ba23da23d988f"
 START = dt.date(2025, 12, 31)
 END = dt.date(2026, 6, 28)
 NETWORK_LIMIT = 12_000
@@ -165,14 +165,18 @@ def load_capture(path: Path, stations: list[dict[str, object]]) -> dict[str, obj
     return payload
 
 
-def historical_cutoffs(client: market.PublicClient) -> dict[str, str]:
-    cutoffs = market.historical_cutoffs(client)
-    if market.parse_timestamp(cutoffs["market_settled_ts"], "market cutoff") <= dt.datetime.combine(
+def validate_historical_cutoffs(cutoffs: dict[str, str]) -> None:
+    if market.parse_timestamp(cutoffs["market_settled_ts"], "market cutoff") < dt.datetime.combine(
         END + dt.timedelta(days=2), dt.time(), tzinfo=dt.timezone.utc
     ):
         raise ValueError("Historical market cutoff does not cover the frozen window.")
     if market.parse_timestamp(cutoffs["trades_created_ts"], "trade cutoff") <= decision_clock(END) + dt.timedelta(minutes=5):
         raise ValueError("Historical trade cutoff does not cover the frozen window.")
+
+
+def historical_cutoffs(client: market.PublicClient) -> dict[str, str]:
+    cutoffs = market.historical_cutoffs(client)
+    validate_historical_cutoffs(cutoffs)
     return cutoffs
 
 
