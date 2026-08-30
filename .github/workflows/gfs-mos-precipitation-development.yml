@@ -1,0 +1,65 @@
+name: Isolated GFS MOS precipitation development
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-gfs-mos-precipitation-development-v1
+  cancel-in-progress: false
+
+jobs:
+  development:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Verify frozen identity and tests
+        run: |
+          test "$(sha256sum gfs_mos_precipitation/DEVELOPMENT.md | cut -d' ' -f1)" = d912e490731b3dcafeec824837709c4241c3a0ef1a958543c543a8b25c3de436
+          test "$(sha256sum stations.json | cut -d' ' -f1)" = 297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12
+          python3 -m unittest -v gfs_mos_precipitation.test_develop gfs_mos_precipitation.test_workflow
+      - name: Initialize immutable run manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-gfs-mos-precipitation-development
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"gfs_mos_precipitation_runner_run_v1",run_id:$run_id,head_sha:$head_sha,identity:"gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v1",development_sha256:"d912e490731b3dcafeec824837709c4241c3a0ef1a958543c543a8b25c3de436",research_only:true,reserved_evaluation_accessed:false,active_trading_capability_changed:false}' \
+            > "$root/run.json"
+      - name: Capture and evaluate training/development dates only
+        id: development
+        continue-on-error: true
+        run: |
+          timeout --signal=TERM --kill-after=30s 60m \
+            python3 gfs_mos_precipitation/develop.py \
+              --output-dir /tmp/mimir-gfs-mos-precipitation-development/capture \
+              --max-requests 23
+          jq '{schema,identity,request_policy,design,coverage,evaluation:(.evaluation|del(.scored_predictions,.selected_predictions)),successor_freeze_permitted}' \
+            /tmp/mimir-gfs-mos-precipitation-development/capture/development.json
+      - name: Write portable checksums
+        if: always()
+        run: |
+          root=/tmp/mimir-gfs-mos-precipitation-development
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gfs-mos-precipitation-development-${{ github.run_id }}
+          path: /tmp/mimir-gfs-mos-precipitation-development
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal acquisition failure
+        if: always() && steps.development.outcome != 'success'
+        run: exit 1
