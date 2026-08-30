@@ -51,3 +51,16 @@ trade.
 Exact equality is complete historical coverage and now passes; `2026-06-29T23:59:59.999999Z` and anything earlier fail.
 The trade cutoff remains required strictly after the final five-minute decision window. This changes no market date,
 contract, score, quote, fee, fill, statistical, economic, or authority rule.
+
+## Exact finalized scalar event exclusion
+
+Replacement run
+[33284497338](https://github.com/R4P7UR3-42/mimir-nam-mos-public-calibration/actions/runs/33284497338)
+first reached designated event and candle evidence. It stopped at `KXHIGHTDC-26FEB02-T38` because every contract in
+the exact `KXHIGHTDC-26FEB02` event has Kalshi `result: scalar`, `status: finalized`, an empty `expiration_value`, and
+zero `settlement_value_dollars`; the adjacent event has ordinary final YES/NO results. The frozen declaration admits
+only a final YES/NO result agreeing with NOAA. Therefore this exact scalar representation is an ineligible event, is
+not converted into a YES or NO outcome, earns no submission/fill/return credit, and does not terminate evaluation of
+the rest of the unchanged fixed window. Any scalar row outside that exact finalized/empty/zero representation remains
+a terminal source-identity failure. No model, window, station, contract direction, score, distance, price, edge, fee,
+fill, return, concentration, drawdown, or statistical gate changes.

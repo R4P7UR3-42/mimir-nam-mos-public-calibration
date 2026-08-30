@@ -141,6 +141,19 @@ class ExecutableTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "contract identity"):
             executable.score_market(source_row(), history(), source_market(result="yes"))
 
+    def test_exact_finalized_zero_value_scalar_is_ineligible_not_reinterpreted(self) -> None:
+        scalar = source_market(
+            result="scalar",
+            status="finalized",
+            settlement_value_dollars="0.0000",
+            expiration_value="",
+        )
+        self.assertIsNone(executable.score_market(source_row(), history(), scalar))
+        with self.assertRaisesRegex(ValueError, "scalar exclusion identity"):
+            executable.score_market(
+                source_row(), history(), {**scalar, "settlement_value_dollars": "1.0000"}
+            )
+
     def test_quote_uses_exact_clock_complement_fee_and_edge(self) -> None:
         candidate = executable.score_market(source_row(), history(), source_market())
         payload = {

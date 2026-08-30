@@ -27,7 +27,7 @@ from nbm_q90_price import evaluate as market  # noqa: E402
 SCHEMA = "gfs_mos_station_rolling_wilson90_executable_no_oos_evaluation_v1"
 IDENTITY = "gfs_mos_station_rolling_wilson90_executable_no_oos_v1"
 PARENT_RESULT_SHA256 = "2cdd2079394f6a3da426f90133fd0e69dc26e4015455f0edc355d78e835d0f62"
-SOURCE_ADDENDUM_SHA256 = "95d611b3715410c7ada6d571a35626e9c869408256372775905ba23da23d988f"
+SOURCE_ADDENDUM_SHA256 = "07c901f83ef17c1ea7d1f0a08fa5ef4cedf11ec588b506fdf4ab11bfbd3185fd"
 START = dt.date(2025, 12, 31)
 END = dt.date(2026, 6, 28)
 NETWORK_LIMIT = 12_000
@@ -248,6 +248,15 @@ def score_market(
         return None
     ticker = source_market.get("ticker")
     outcome_no = observed <= floor
+    result = source_market.get("result")
+    if result == "scalar":
+        if (
+            source_market.get("status") == "finalized"
+            and source_market.get("settlement_value_dollars") == "0.0000"
+            and source_market.get("expiration_value") == ""
+        ):
+            return None
+        raise ValueError(f"Exact scalar exclusion identity is invalid for {ticker}.")
     if (
         not isinstance(ticker, str)
         or floor != floor.to_integral_value()
@@ -255,8 +264,8 @@ def score_market(
         or source_market.get("strike_type") != "greater"
         or source_market.get("cap_strike") is not None
         or source_market.get("yes_sub_title") != f"{int(floor) + 1}° or above"
-        or source_market.get("result") not in ("yes", "no")
-        or (source_market.get("result") == "no") != outcome_no
+        or result not in ("yes", "no")
+        or (result == "no") != outcome_no
         or ("is_provisional" in source_market and source_market["is_provisional"] is not False)
         or ("mve_collection_ticker" in source_market and source_market["mve_collection_ticker"] not in (None, ""))
         or ("fee_waiver_expiration_time" in source_market and source_market["fee_waiver_expiration_time"] is not None)
