@@ -14,7 +14,6 @@ The original NAM one-shot run terminated on a frozen source-schema gate before o
 Its unchanged [executable-price OOS evaluation](gfs_mos_price/RESULT.md) then failed nine initial gates, with five public
 trades, `-$0.4169` exact-fee P&L, adverse Brier skill, and a negative clustered lower return. That family is terminal.
 
-The next materially distinct family is a [training-only daily low-temperature market calibration](low_market_development/DEVELOPMENT.md).
-It precommits disjoint training/evaluation stations and eight exact tail/price cells, applies whole-date clustered and
-multiple-testing-adjusted exact-fee gates, and cannot query its reserved evaluation inventory. A passing development
-artifact would permit only a second frozen OOS workflow; it is not profitability, capital, policy, or order authority.
+The materially distinct [daily low-temperature market calibration](low_market_development/RESULT.md) also terminated in
+training. All eight predeclared tail/price cells had negative multiple-testing-adjusted exact-fee lower returns; its
+reserved evaluation stations remain untouched. No OOS workflow or trading authority is permitted for that identity.
