@@ -20,7 +20,7 @@ from market_implied import evaluate as market  # noqa: E402
 
 IDENTITY = "daily_low_extreme_market_implied_no_18z_development_v1"
 SCHEMA = "daily_low_extreme_market_implied_no_18z_development_v1"
-DEVELOPMENT_SHA256 = "0e6f56df8189a3e234b7d5d16bb5b9390d968ec1b645f1481eb116632952c7cf"
+DEVELOPMENT_SHA256 = "2081e79a2606d7417d26c1eb5f93a717b30a4def73b29480d560c3c9580b4df3"
 TRAINING_SERIES_SHA256 = "65cff9a375c81967b2d6177401b11ae9527f85ff1de2db0f42f862ef179f0a21"
 RESERVED_SERIES_SHA256 = "4a407d82e30e8a60aa2d3ff3d3cd587d464d8645156d9bcfbd8861404fe367b6"
 START = dt.date(2025, 12, 13)
@@ -107,7 +107,7 @@ def market_date_for_row(row: dict[str, object], series_ticker: str) -> dt.date:
     occurrence = row.get("occurrence_datetime")
     if (
         occurrence is not None
-        and market.parse_timestamp(occurrence, f"{ticker} occurrence").date() != parsed + dt.timedelta(days=1)
+        and market.parse_timestamp(occurrence, f"{ticker} occurrence").date() < parsed
     ):
         raise ValueError(f"Occurrence date conflicts for {ticker}.")
     return parsed

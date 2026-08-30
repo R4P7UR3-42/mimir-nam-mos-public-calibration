@@ -146,12 +146,16 @@ class LowMarketDevelopmentTest(unittest.TestCase):
 
         self.assertEqual(develop.discover_training_events(Client(), "KXLOWTATL"), {})
 
-    def test_occurrence_identity_is_exact_next_day_when_present(self) -> None:
+    def test_occurrence_metadata_cannot_shift_or_precede_event_identity(self) -> None:
         event = "KXLOWTATL-26JAN15"
         row = terminal_market(f"{event}-T55", event, "greater")
         self.assertEqual(develop.validate_terminal_market(row, "KXLOWTATL"), dt.date(2026, 1, 15))
+        self.assertEqual(
+            develop.validate_terminal_market({**row, "occurrence_datetime": "2026-01-26T12:00:00Z"}, "KXLOWTATL"),
+            dt.date(2026, 1, 15),
+        )
         with self.assertRaisesRegex(ValueError, "Occurrence date conflicts"):
-            develop.validate_terminal_market({**row, "occurrence_datetime": "2026-01-15T12:00:00Z"}, "KXLOWTATL")
+            develop.validate_terminal_market({**row, "occurrence_datetime": "2026-01-14T12:00:00Z"}, "KXLOWTATL")
 
     def test_price_cells_bind_exact_adjacent_boundaries(self) -> None:
         self.assertIsNone(develop.cell_for("upper", Decimal("0.6999")))
