@@ -1,0 +1,67 @@
+name: Isolated low-temperature market development
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-low-market-development-v1
+  cancel-in-progress: false
+
+jobs:
+  development:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Verify frozen training identity and tests
+        working-directory: low_market_development
+        run: |
+          test "$(sha256sum DEVELOPMENT.md | cut -d' ' -f1)" = 0e6f56df8189a3e234b7d5d16bb5b9390d968ec1b645f1481eb116632952c7cf
+          test "$(sha256sum training_series.json | cut -d' ' -f1)" = 65cff9a375c81967b2d6177401b11ae9527f85ff1de2db0f42f862ef179f0a21
+          test "$(sha256sum reserved_evaluation_series.json | cut -d' ' -f1)" = 4a407d82e30e8a60aa2d3ff3d3cd587d464d8645156d9bcfbd8861404fe367b6
+          python3 -m unittest -v
+      - name: Initialize immutable run manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-low-market-development
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"low_market_development_runner_v1",run_id:$run_id,head_sha:$head_sha,identity:"daily_low_extreme_market_implied_no_18z_development_v1",training_only:true,evaluation_series_accessed:false,research_only:true,active_trading_capability_changed:false,production_database_accessed:false}' \
+            > "$root/run.json"
+      - name: Run one frozen training-only development capture
+        id: development
+        continue-on-error: true
+        run: |
+          timeout --signal=TERM --kill-after=30s 50m \
+            python3 low_market_development/develop.py \
+              --output-dir /tmp/mimir-low-market-development/evidence \
+              --max-requests 5000
+          jq '{schema,identity,network_policy,captured_rows,candidate_rows,captured_dates,captured_series,calibration:(.calibration|.cells=(.cells|map(del(.series_holdouts)))),successor_freeze_permitted}' \
+            /tmp/mimir-low-market-development/evidence/development.json
+      - name: Write portable checksums
+        if: always()
+        run: |
+          root=/tmp/mimir-low-market-development
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: low-market-development-${{ github.run_id }}
+          path: /tmp/mimir-low-market-development
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal source or runner failure
+        if: always() && steps.development.outcome != 'success'
+        run: exit 1
