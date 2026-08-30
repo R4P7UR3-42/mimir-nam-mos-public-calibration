@@ -22,6 +22,6 @@ The [GFS MOS precipitation development](gfs_mos_precipitation/RESULT.md) was a c
 screen of a distinct daily no-rain model. Its frozen v4 source gate rejected KMSY at 321/327 available development
 labels, so the identity is terminal and its 250 later dates remain untouched. It creates no trading authority.
 
-The [station-specific NBM offered-tail development](nbm_station_tail/PREDECLARATION.md) tests one bounded correction
-to the rejected pooled tail model: every score is capped by both its pooled predecessor and an exact station Wilson-90
-floor. It uses already-inspected dates only and can justify at most a later prospective OOS freeze.
+The [station-specific NBM offered-tail development](nbm_station_tail/RESULT.md) rejected the bounded correction to the
+pooled tail model. It selected only 14 dates, remained severely overconfident, and lost `-$1.2836` after exact fees.
+The identity is terminal and no OOS successor is permitted.
