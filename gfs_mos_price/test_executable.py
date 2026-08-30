@@ -1,5 +1,7 @@
 import datetime as dt
 from decimal import Decimal
+import csv
+import io
 from pathlib import Path
 import sys
 import unittest
@@ -66,6 +68,31 @@ class ExecutableTest(unittest.TestCase):
         capture.RequestBudget(13)
         with self.assertRaises(ValueError):
             capture.RequestBudget(12)
+
+    def test_stale_isd_catalog_end_exception_is_exactly_bounded(self) -> None:
+        fields = ["USAF", "WBAN", "STATION NAME", "CTRY", "STATE", "ICAO", "LAT", "LON", "ELEV(M)", "BEGIN", "END"]
+        station = {"station_id": "KSEA", "latitude": 47.45, "longitude": -122.309}
+
+        def payload(end: str) -> bytes:
+            buffer = io.StringIO()
+            writer = csv.DictWriter(buffer, fieldnames=fields)
+            writer.writeheader()
+            writer.writerow({
+                "USAF": "727930", "WBAN": "24233", "STATION NAME": "SEATTLE-TACOMA INTERNATIONAL AIRPORT",
+                "CTRY": "US", "STATE": "WA", "ICAO": "KSEA", "LAT": "47.450", "LON": "-122.309",
+                "ELEV(M)": "132.9", "BEGIN": "19480101", "END": end,
+            })
+            return buffer.getvalue().encode()
+
+        expected_count = capture.EXPECTED_STATION_COUNT
+        capture.EXPECTED_STATION_COUNT = 1
+        try:
+            identities = capture.parse_isd(payload("20250825"), [station])
+            self.assertEqual(identities[0]["ghcn_station_id"], "USW00024233")
+            with self.assertRaisesRegex(ValueError, "does not cover"):
+                capture.parse_isd(payload("20250824"), [station])
+        finally:
+            capture.EXPECTED_STATION_COUNT = expected_count
 
     def test_contract_mapping_uses_residual_distance_not_absolute_boundary(self) -> None:
         candidate = executable.score_market(source_row(), history("-5"), source_market())

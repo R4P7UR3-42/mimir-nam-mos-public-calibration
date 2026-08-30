@@ -39,6 +39,8 @@ EXPECTED_EVALUATION_DATES = 250
 EXPECTED_STATION_COUNT = 20
 EXPECTED_NETWORK_REQUESTS = 23
 SOURCE_FILE_PREFIX = "iem-nam-mos"
+REQUIRE_ISD_HISTORY_THROUGH_WINDOW = True
+MINIMUM_ISD_HISTORY_END: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -234,7 +236,14 @@ def parse_isd(payload: bytes, stations: list[dict[str, object]]) -> list[dict[st
         selected = matches[0]
         required_begin = CALIBRATION_START.strftime("%Y%m%d")
         required_end = EVALUATION_END.strftime("%Y%m%d")
-        if selected["BEGIN"] > required_begin or selected["END"] < required_end:
+        if (
+            selected["BEGIN"] > required_begin
+            or (REQUIRE_ISD_HISTORY_THROUGH_WINDOW and selected["END"] < required_end)
+            or (
+                not REQUIRE_ISD_HISTORY_THROUGH_WINDOW
+                and (MINIMUM_ISD_HISTORY_END is None or selected["END"] < MINIMUM_ISD_HISTORY_END)
+            )
+        ):
             raise ValueError(f"NOAA ISD identity does not cover the frozen window for {station['station_id']}.")
         if abs(float(selected["LAT"]) - float(station["latitude"])) > 0.2 or abs(float(selected["LON"]) - float(station["longitude"])) > 0.2:
             raise ValueError(f"NOAA ISD coordinates conflict for {station['station_id']}.")
@@ -412,6 +421,8 @@ def main() -> None:
             "duplicate_policy": "collapse_only_identical_semantic_selected_row",
             "selected_exact_duplicates_per_station": EXPECTED_EXACT_DUPLICATES_PER_STATION,
             "global_optional_schema_required": REQUIRE_GLOBAL_OPTIONAL_SCHEMA,
+            "isd_history_through_window_required": REQUIRE_ISD_HISTORY_THROUGH_WINDOW,
+            "minimum_isd_history_end": MINIMUM_ISD_HISTORY_END,
             "calibration_first_date": calibration_dates[0],
             "calibration_last_date": calibration_dates[-1],
             "calibration_dates": len(calibration_dates),

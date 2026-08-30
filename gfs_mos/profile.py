@@ -13,3 +13,5 @@ def configure(capture_module) -> None:
     capture_module.DUPLICATE_COMPARE_FIELDS = set(capture_module.REQUIRED_MOS_FIELDS)
     capture_module.EXPECTED_EXACT_DUPLICATES_PER_STATION = None
     capture_module.REQUIRE_GLOBAL_OPTIONAL_SCHEMA = False
+    capture_module.REQUIRE_ISD_HISTORY_THROUGH_WINDOW = True
+    capture_module.MINIMUM_ISD_HISTORY_END = None
