@@ -219,6 +219,21 @@ def require_exact_duplicate_identity(station_id: str, exact_duplicate_count: int
         )
 
 
+def coverage_report(
+    all_dates: list[str],
+    rows: list[dict[str, object]],
+    forecast_sources: list[dict[str, object]],
+) -> dict[str, int]:
+    return {
+        "requested_dates": len(all_dates),
+        "complete_dates": len(all_dates),
+        "station_dates": len(rows),
+        "selected_exact_duplicate_rows": sum(
+            int(source["selected_exact_duplicate_count"]) for source in forecast_sources
+        ),
+    }
+
+
 def parse_isd(payload: bytes, stations: list[dict[str, object]]) -> list[dict[str, object]]:
     reader = csv.DictReader(io.StringIO(payload.decode("utf-8")))
     expected = ["USAF", "WBAN", "STATION NAME", "CTRY", "STATE", "ICAO", "LAT", "LON", "ELEV(M)", "BEGIN", "END"]
@@ -431,14 +446,7 @@ def main() -> None:
             "evaluation_dates": len(evaluation_dates),
             "station_count": EXPECTED_STATION_COUNT,
         },
-        "coverage": {
-            "requested_dates": 395,
-            "complete_dates": 395,
-            "station_dates": len(rows),
-            "selected_exact_duplicate_rows": sum(
-                int(source["selected_exact_duplicate_count"]) for source in forecast_sources
-            ),
-        },
+        "coverage": coverage_report(all_dates, rows, forecast_sources),
         "station_identities": identities,
         "forecast_sources": forecast_sources,
         "outcome_sources": [{"url": ISD_URL, "sha256": sha256(isd_payload), "headers": isd_headers}, *outcome_sources],

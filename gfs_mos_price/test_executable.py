@@ -68,6 +68,14 @@ class ExecutableTest(unittest.TestCase):
         capture.RequestBudget(13)
         with self.assertRaises(ValueError):
             capture.RequestBudget(12)
+        rows = [{"station_id": "test"}] * 3010
+        sources = [{"selected_exact_duplicate_count": 0} for _ in range(10)]
+        self.assertEqual(capture.coverage_report(calibration_dates + evaluation_dates, rows, sources), {
+            "requested_dates": 301,
+            "complete_dates": 301,
+            "station_dates": 3010,
+            "selected_exact_duplicate_rows": 0,
+        })
 
     def test_stale_isd_catalog_end_exception_is_exactly_bounded(self) -> None:
         fields = ["USAF", "WBAN", "STATION NAME", "CTRY", "STATE", "ICAO", "LAT", "LON", "ELEV(M)", "BEGIN", "END"]
