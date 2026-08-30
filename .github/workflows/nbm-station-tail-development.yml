@@ -1,0 +1,66 @@
+name: Isolated public NOAA NBM station-tail development
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-public-noaa-nbm-station-tail-v1
+  cancel-in-progress: false
+
+jobs:
+  evaluation:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Verify frozen station-tail identity, inputs, and tests
+        run: |
+          test "$(sha256sum nbm_station_tail/PREDECLARATION.md | cut -d' ' -f1)" = a97b2d3572ccce5df1b03d82537836104001ac7949cc1436e7fc825fe95cfb0c
+          test "$(sha256sum nbm_q90_price/station_series.json | cut -d' ' -f1)" = 98a46e35e06c485cfcaa2b2632a2559b90cb5012491f718f5a570d13a26cdbbd
+          python3 -m py_compile nbm_station_tail/evaluate.py nbm_station_tail/test_evaluate.py nbm_station_tail/test_workflow.py
+          python3 -m unittest -v nbm_station_tail.test_evaluate nbm_station_tail.test_workflow
+      - name: Initialize immutable public station-tail run manifest
+        run: |
+          umask 077
+          root=/tmp/mimir-nbm-station-tail-public-v1
+          mkdir -p "$root"
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            '{schema:"noaa_nbm_station_tail_public_run_v1",run_id:$run_id,head_sha:$head_sha,identity:"noaa_nbm_v5_station_specific_wilson90_offered_tail_no_development_v1",predeclaration_sha256:"a97b2d3572ccce5df1b03d82537836104001ac7949cc1436e7fc825fe95cfb0c",research_only:true,active_trading_capability_changed:false,production_database_accessed:false,independent_oos_evidence:false}' \
+            > "$root/run.json"
+      - name: Run the single frozen station-tail development audit
+        id: evaluation
+        continue-on-error: true
+        run: |
+          timeout --signal=TERM --kill-after=30s 30m \
+            python3 nbm_station_tail/evaluate.py \
+              --output-dir /tmp/mimir-nbm-station-tail-public-v1/evidence \
+              --max-requests 3000
+          jq '{schema,identity,training_window,development_window,decision_clock,score_policy,price_policy,network_policy,outcome_source,outcome_conflicts,support_funnel,evaluation:(.evaluation|del(.selections)),research_only,active_trading_capability_changed,production_database_accessed,independent_oos_evidence,capital_risk_authority,production_activation}' \
+            /tmp/mimir-nbm-station-tail-public-v1/evidence/report.json
+      - name: Seal immutable public station-tail evidence
+        if: always()
+        run: |
+          root=/tmp/mimir-nbm-station-tail-public-v1
+          cd "$root"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload immutable public station-tail artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: noaa-nbm-station-tail-development-v1-${{ github.run_id }}
+          path: /tmp/mimir-nbm-station-tail-public-v1
+          if-no-files-found: error
+          retention-days: 1
+      - name: Preserve terminal station-tail source or runner failure
+        if: always() && steps.evaluation.outcome != 'success'
+        run: exit 1
