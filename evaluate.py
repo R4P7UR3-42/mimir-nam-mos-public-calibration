@@ -47,6 +47,41 @@ def is_sha256(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
+def validate_duplicate_counts(
+    coverage: object,
+    forecast_sources: object,
+) -> None:
+    expected_duplicate_rows = (
+        20 * capture.EXPECTED_EXACT_DUPLICATES_PER_STATION
+        if capture.EXPECTED_EXACT_DUPLICATES_PER_STATION is not None
+        else None
+    )
+    if (
+        not isinstance(coverage, dict)
+        or not isinstance(coverage.get("selected_exact_duplicate_rows"), int)
+        or coverage["selected_exact_duplicate_rows"] < 0
+        or (
+            expected_duplicate_rows is not None
+            and coverage["selected_exact_duplicate_rows"] != expected_duplicate_rows
+        )
+        or not isinstance(forecast_sources, list)
+        or len(forecast_sources) != 20
+        or any(not isinstance(source, dict) for source in forecast_sources)
+        or any(
+            not isinstance(source.get("selected_exact_duplicate_count"), int)
+            or source["selected_exact_duplicate_count"] < 0
+            or (
+                capture.EXPECTED_EXACT_DUPLICATES_PER_STATION is not None
+                and source["selected_exact_duplicate_count"] != capture.EXPECTED_EXACT_DUPLICATES_PER_STATION
+            )
+            for source in forecast_sources
+        )
+        or sum(int(source["selected_exact_duplicate_count"]) for source in forecast_sources)
+        != coverage["selected_exact_duplicate_rows"]
+    ):
+        raise ValueError("Capture duplicate count identity is invalid.")
+
+
 def validate_capture_row(row: dict[str, object]) -> None:
     station = str(row.get("station_id", ""))
     try:
@@ -64,7 +99,7 @@ def validate_capture_row(row: dict[str, object]) -> None:
         raise ValueError(f"Capture residual identity conflicts for {station}|{market_date}.")
     initialized = market_date - dt.timedelta(days=1)
     expected = {
-        "forecast_model": "noaa_nam_v4_station_mos_n_x",
+        "forecast_model": capture.FORECAST_MODEL,
         "forecast_initialized_at": f"{initialized.isoformat()}T12:00:00Z",
         "forecast_available_by": f"{initialized.isoformat()}T20:00:00Z",
         "forecast_time": f"{(market_date + dt.timedelta(days=1)).isoformat()}T00:00:00Z",
@@ -98,11 +133,13 @@ def load_capture(path: Path) -> dict[str, object]:
     design = payload.get("design", {})
     coverage = payload.get("coverage", {})
     if design != {
-        "forecast_model": "noaa_nam_v4_station_mos_n_x",
+        "forecast_model": capture.FORECAST_MODEL,
+        "source_model": capture.SOURCE_MODEL,
         "forecast_runtime_utc": "12:00:00",
         "forecast_available_by_utc": "20:00:00",
         "duplicate_policy": "collapse_only_identical_semantic_selected_row",
-        "selected_exact_duplicates_per_station": 1,
+        "selected_exact_duplicates_per_station": capture.EXPECTED_EXACT_DUPLICATES_PER_STATION,
+        "global_optional_schema_required": capture.REQUIRE_GLOBAL_OPTIONAL_SCHEMA,
         "calibration_first_date": "2021-02-15",
         "calibration_last_date": "2021-07-09",
         "calibration_dates": 145,
@@ -112,15 +149,16 @@ def load_capture(path: Path) -> dict[str, object]:
         "station_count": 20,
     }:
         raise ValueError("Capture design identity is invalid.")
-    if coverage != {
-        "requested_dates": 395,
-        "complete_dates": 395,
-        "station_dates": 7900,
-        "selected_exact_duplicate_rows": 20,
-    }:
+    if (
+        not isinstance(coverage, dict)
+        or coverage.get("requested_dates") != 395
+        or coverage.get("complete_dates") != 395
+        or coverage.get("station_dates") != 7900
+    ):
         raise ValueError("Capture coverage is incomplete.")
     forecast_sources = payload.get("forecast_sources")
     station_identities = payload.get("station_identities")
+    validate_duplicate_counts(coverage, forecast_sources)
     station_path = Path(capture.__file__).with_name("stations.json")
     if capture.file_sha256(station_path) != capture.STATIONS_SHA256:
         raise ValueError("Frozen station inventory hash is invalid.")
@@ -136,10 +174,12 @@ def load_capture(path: Path) -> dict[str, object]:
         or {source.get("station_id") for source in forecast_sources}
         != expected_station_ids
         or {row.get("station_id") for row in station_identities} != expected_station_ids
-        or any(source.get("selected_exact_duplicate_count") != 1 for source in forecast_sources)
         or any(source.get("url") != capture.mos_url(str(source.get("station_id"))) for source in forecast_sources)
         or any(not is_sha256(source.get("sha256")) for source in forecast_sources)
-        or len({tuple(source.get("csv_fields", [])) for source in forecast_sources}) != 1
+        or (
+            capture.REQUIRE_GLOBAL_OPTIONAL_SCHEMA
+            and len({tuple(source.get("csv_fields", [])) for source in forecast_sources}) != 1
+        )
         or any(not capture.REQUIRED_MOS_FIELDS.issubset(source.get("csv_fields", [])) for source in forecast_sources)
     ):
         raise ValueError("Capture duplicate identity is invalid.")

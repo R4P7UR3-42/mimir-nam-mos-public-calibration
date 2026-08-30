@@ -78,6 +78,12 @@ class EvaluateTest(unittest.TestCase):
                 rows.append({"station_id": station, "market_date": market_date, "outcome": 1, "score": "0.90"})
         self.assertEqual(evaluate.clustered_lower(rows, 0.05), Decimal("0.1"))
 
+    def test_nam_duplicate_coverage_is_exact_and_bound_to_sources(self) -> None:
+        sources = [{"selected_exact_duplicate_count": 1} for _ in range(20)]
+        evaluate.validate_duplicate_counts({"selected_exact_duplicate_rows": 20}, sources)
+        with self.assertRaisesRegex(ValueError, "duplicate count identity"):
+            evaluate.validate_duplicate_counts({"selected_exact_duplicate_rows": 19}, sources)
+
 
 if __name__ == "__main__":
     unittest.main()
