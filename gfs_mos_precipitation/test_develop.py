@@ -70,11 +70,12 @@ class DevelopTest(unittest.TestCase):
     def test_parser_builds_exact_product_proxy_and_collapses_exact_duplicate(self) -> None:
         market_date = dt.date(2025, 1, 2)
         rows = exact_rows(market_date, ["0", "10", "20", "30", "40"])
-        parsed, fields, duplicates = develop.parse_mos(
+        parsed, fields, duplicates, missing = develop.parse_mos(
             mos_payload([*rows, dict(rows[0])]), STATION, [market_date],
         )
         self.assertIn("p06", fields)
         self.assertEqual(duplicates, 1)
+        self.assertEqual(missing, [])
         self.assertEqual(parsed[0]["selected_p06_percent"], ["0", "10", "20", "30", "40"])
         self.assertEqual(parsed[0]["raw_no_rain_proxy"], "0.30240000")
         self.assertEqual(parsed[0]["proxy_band"], "0.00-0.50")
@@ -91,6 +92,15 @@ class DevelopTest(unittest.TestCase):
         rows = exact_rows(market_date, ["0", "10", "20", "30", "40"])
         with self.assertRaisesRegex(ValueError, "coverage is incomplete"):
             develop.parse_mos(mos_payload(rows[:-1]), STATION, [market_date])
+
+    def test_entire_missing_runtime_is_reported_without_substitution(self) -> None:
+        market_date = dt.date(2025, 1, 2)
+        alternate = exact_rows(market_date, ["0", "10", "20", "30", "40"])
+        for row in alternate:
+            row["runtime"] = f"{(market_date - dt.timedelta(days=1)).isoformat()} 06:00:00"
+        parsed, _, _, missing = develop.parse_mos(mos_payload(alternate), STATION, [market_date])
+        self.assertEqual(parsed, [])
+        self.assertEqual(missing, [market_date])
 
     def test_trace_is_rain_and_nontrace_zero_is_no(self) -> None:
         identities = [{"station_id": "KATL", "ghcn_station_id": "USW00013874", "station_name": "ATL"}]

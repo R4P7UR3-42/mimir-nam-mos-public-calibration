@@ -22,9 +22,9 @@ from zoneinfo import ZoneInfo
 
 getcontext().prec = 40
 ROOT = Path(__file__).resolve().parents[1]
-IDENTITY = "gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v1"
+IDENTITY = "gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v2"
 SCHEMA = "gfs_mos_precipitation_development_v1"
-DEVELOPMENT_SHA256 = "d912e490731b3dcafeec824837709c4241c3a0ef1a958543c543a8b25c3de436"
+DEVELOPMENT_SHA256 = "cd185e6f21a7f40f20f46c2b84a56fbbd3c2e80e6663a063b4b61490748c9641"
 STATIONS_SHA256 = "297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12"
 IEM_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/mos.py"
 ISD_URL = "https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv"
@@ -47,6 +47,7 @@ Z95 = Decimal("1.6448536269514722")
 PRICE = Decimal("0.70")
 MIN_EDGE = Decimal("0.015")
 MIN_HISTORY = 30
+MIN_COMPLETE_HISTORY = 358
 BOOTSTRAP_SAMPLES = 10_000
 SCORE_BANDS = (
     (Decimal("0.00"), Decimal("0.50"), "0.00-0.50"),
@@ -201,7 +202,7 @@ def parse_mos(
     payload: bytes,
     station: dict[str, object],
     desired_dates: list[dt.date],
-) -> tuple[list[dict[str, object]], tuple[str, ...], int]:
+) -> tuple[list[dict[str, object]], tuple[str, ...], int, list[dt.date]]:
     station_id = str(station["station_id"])
     reader = csv.DictReader(io.StringIO(payload.decode("utf-8")))
     fieldnames = tuple(reader.fieldnames or ())
@@ -209,6 +210,7 @@ def parse_mos(
         raise ValueError(f"IEM MOS schema drifted for {station_id}.")
     desired = set(desired_dates)
     selected: dict[tuple[dt.date, dt.datetime], Decimal] = {}
+    present_runtimes: set[dt.date] = set()
     duplicates = 0
     for row in reader:
         if row.get("station") != station_id or row.get("model") != SOURCE_MODEL:
@@ -223,6 +225,7 @@ def parse_mos(
         market_date = runtime.date() + dt.timedelta(days=1)
         if market_date not in desired:
             continue
+        present_runtimes.add(market_date)
         expected = set(local_day_interval_ends(market_date, str(station["time_zone"])))
         if forecast_time not in expected:
             continue
@@ -242,7 +245,11 @@ def parse_mos(
         else:
             selected[key] = p06
     output = []
+    missing_runtimes = []
     for market_date in desired_dates:
+        if market_date not in present_runtimes:
+            missing_runtimes.append(market_date)
+            continue
         endpoints = local_day_interval_ends(market_date, str(station["time_zone"]))
         missing = [endpoint for endpoint in endpoints if (market_date, endpoint) not in selected]
         if missing:
@@ -265,7 +272,7 @@ def parse_mos(
             "raw_no_rain_proxy": str(raw_no),
             "proxy_band": proxy_band(raw_no),
         })
-    return output, fieldnames, duplicates
+    return output, fieldnames, duplicates, missing_runtimes
 
 
 def parse_isd(payload: bytes, stations: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -468,7 +475,7 @@ def score_rows(rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], 
                 prior for prior in station_rows
                 if window_start <= dt.date.fromisoformat(str(prior["market_date"])) <= cutoff
             ]
-            if len(history) != 365:
+            if not MIN_COMPLETE_HISTORY <= len(history) <= 365:
                 raise ValueError(f"Causal station history is incomplete for {station}|{market_date}: {len(history)}.")
             same_band = [prior for prior in history if prior["proxy_band"] == row["proxy_band"]]
             if len(same_band) < MIN_HISTORY:
@@ -477,7 +484,7 @@ def score_rows(rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], 
             model_probability = (Decimal(successes) + Decimal("0.5")) / (Decimal(len(same_band)) + Decimal(1))
             conservative_score = wilson_lower(successes, len(same_band))
             climatology_successes = sum(int(prior["outcome_no"]) for prior in history)
-            station_climatology = (Decimal(climatology_successes) + Decimal("0.5")) / Decimal(366)
+            station_climatology = (Decimal(climatology_successes) + Decimal("0.5")) / (Decimal(len(history)) + Decimal(1))
             economic_eligible = conservative_score - PRICE - fee >= MIN_EDGE
             fixed_return = Decimal(1) - PRICE - fee if int(row["outcome_no"]) else -PRICE - fee
             scored.append({
@@ -613,13 +620,15 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     forecasts: dict[tuple[str, str], dict[str, object]] = {}
     forecast_sources = []
+    missing_runtime_sets: list[set[dt.date]] = []
     for index, station in enumerate(stations, start=1):
         station_id = str(station["station_id"])
         url = mos_url(station_id)
         payload, headers = fetch(url, budget)
         create_once(output / "raw" / f"iem-gfs-mos-{station_id}.csv", payload)
         atomic_json(output / "raw" / f"iem-gfs-mos-{station_id}.headers.json", headers)
-        parsed, fields, duplicates = parse_mos(payload, station, all_dates)
+        parsed, fields, duplicates, missing_runtimes = parse_mos(payload, station, all_dates)
+        missing_runtime_sets.append(set(missing_runtimes))
         for row in parsed:
             key = (station_id, str(row["market_date"]))
             if key in forecasts:
@@ -632,9 +641,16 @@ def main() -> None:
             "headers": headers,
             "csv_fields": list(fields),
             "selected_exact_duplicate_count": duplicates,
+            "missing_exact_12z_runtime_dates": [value.isoformat() for value in missing_runtimes],
         })
         print(json.dumps({"forecast_station": station_id, "completed_stations": index, "network_requests": budget.used}, sort_keys=True), flush=True)
-    expected_rows = EXPECTED_STATIONS * (EXPECTED_HISTORY_DATES + EXPECTED_DEVELOPMENT_DATES)
+    if not missing_runtime_sets or any(values != missing_runtime_sets[0] for values in missing_runtime_sets[1:]):
+        raise ValueError("Exact 12Z missing-runtime dates are not globally identical across stations.")
+    global_missing_runtimes = missing_runtime_sets[0]
+    complete_date_count = len(all_dates) - len(global_missing_runtimes)
+    if Decimal(complete_date_count) / Decimal(len(all_dates)) < Decimal("0.99"):
+        raise ValueError("Exact 12Z global runtime coverage is below 99 percent.")
+    expected_rows = EXPECTED_STATIONS * complete_date_count
     if len(forecasts) != expected_rows:
         raise ValueError(f"Forecast coverage is incomplete: {len(forecasts)} != {expected_rows}.")
     isd_payload, isd_headers = fetch(ISD_URL, budget)
@@ -657,6 +673,8 @@ def main() -> None:
     for station in stations:
         station_id = str(station["station_id"])
         for market_date in all_dates:
+            if market_date in global_missing_runtimes:
+                continue
             key = (station_id, market_date.isoformat())
             rows.append({**forecasts[key], **outcomes[key]})
     result = evaluate(rows)
@@ -697,6 +715,7 @@ def main() -> None:
             "rolling_history_dates": 365,
             "outcome_lag_dates": 2,
             "minimum_same_band_history": MIN_HISTORY,
+            "minimum_complete_history_dates": MIN_COMPLETE_HISTORY,
             "fixed_price": str(PRICE),
             "fixed_price_fee": str(exact_fee(PRICE)),
             "minimum_edge": str(MIN_EDGE),
@@ -704,8 +723,10 @@ def main() -> None:
         },
         "coverage": {
             "station_dates": len(rows),
-            "history_station_dates": EXPECTED_HISTORY_DATES * EXPECTED_STATIONS,
-            "development_station_dates": EXPECTED_DEVELOPMENT_DATES * EXPECTED_STATIONS,
+            "complete_dates": complete_date_count,
+            "global_missing_exact_12z_runtime_dates": [value.isoformat() for value in sorted(global_missing_runtimes)],
+            "history_station_dates": sum(value not in global_missing_runtimes for value in history_dates) * EXPECTED_STATIONS,
+            "development_station_dates": sum(value not in global_missing_runtimes for value in development_dates) * EXPECTED_STATIONS,
             "trace_as_rain_rows": sum(row["measurement_flag"] == "T" for row in rows),
             "four_interval_rows": sum(len(row["selected_interval_ends_utc"]) == 4 for row in rows),
             "five_interval_rows": sum(len(row["selected_interval_ends_utc"]) == 5 for row in rows),

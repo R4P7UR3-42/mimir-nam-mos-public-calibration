@@ -1,6 +1,6 @@
 # GFS MOS daily-precipitation development freeze
 
-- Identity: `gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v1`
+- Identity: `gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v2`
 - State: training/development only; no trading or production authority
 - Frozen history: 2024-01-01 through 2024-12-31
 - Frozen development targets: 2025-01-01 through 2025-11-23
@@ -17,9 +17,12 @@ Use the Iowa Environmental Mesonet public NWS MOS archive with exact model `GFS`
 12:00:00Z runtime. `p06` is the NOAA six-hour probability of at least 0.01 inch liquid-equivalent precipitation and is
 valid for the six-hour interval ending at `ftime`. Require the semantic fields `runtime`, `ftime`, `model`, `p06`, and
 `station`. For each local calendar date, select every six-hour interval that intersects `[00:00,24:00)` in the station's
-checksum-bound IANA time zone. This normally selects four or five intervals. Collapse only exact semantic duplicates;
-missing, conflicting, wrong-station/model/runtime, non-six-hour-clock, out-of-range, or incomplete local-day coverage
-fails closed.
+checksum-bound IANA time zone. This normally selects four or five intervals. Collapse only exact semantic duplicates.
+An entirely absent exact 12Z runtime may exclude that market date only when the missing-date set is identical at all 20
+stations and at least 99% of the frozen 693 history/development dates remain complete. Exclude such a date globally from
+forecast rows and later model history/targets. A station-specific missing runtime, partial runtime, null selected `p06`,
+conflicting duplicate, wrong station/model/runtime, non-six-hour clock, out-of-range value, or incomplete local-day
+coverage within an existing runtime fails closed. Never substitute 00Z, 06Z, 18Z, or another date.
 
 Use exact NOAA NCEI Daily Summaries `PRCP` under a freshly captured ICAO/WBAN-to-GHCN identity. A nonzero value is rain.
 A zero value whose measurement flag is `T` is also rain; it must never be relabeled no-rain. Reject malformed attributes,
@@ -46,7 +49,8 @@ Assign the proxy to exactly one fixed band:
 6. `[0.95,1.0001)`
 
 For every development target, use only complete same-station/same-band labels in the 365 calendar dates ending two
-dates before the target. Require at least 30 labels. The probability estimate is the Jeffreys posterior mean
+dates before the target. Require at least 358 globally complete station dates and at least 30 same-band labels. The
+probability estimate is the Jeffreys posterior mean
 `(no + 0.5)/(n + 1)`. The conservative score is the one-sided 95% Wilson lower bound. Compute a causal same-station
 365-date Jeffreys climatology as a benchmark. No threshold, band, window, station, date, price, or side may be selected
 after observing development results.
@@ -76,3 +80,11 @@ All must pass before an unchanged 250-date evaluation workflow may be frozen:
 Passing permits only a checksum-bound successor freeze. It does not permit evaluation-date access in this workflow,
 recommendations, a cohort, capital, orders, deployment, live-ready, scale-ready, or a `$100` projection. Failure is
 terminal for this identity: do not inspect the reserved dates or retune against development.
+
+## Source-contract correction
+
+The first v1 exact-main run `33287841384` stopped before NOAA outcomes after KATL proved that the 2025-05-29 12Z GFS MOS
+runtime is entirely absent while all other 692 requested KATL runtimes are present. V2 makes only the global-outage rule
+above explicit. It does not inspect an outcome, change a model or gate, select the observed date by name, substitute a
+forecast, or access the reserved evaluation window. V1 remains a terminal source-contract artifact and receives no
+statistical credit.
