@@ -22,7 +22,7 @@ jobs:
           python-version: "3.14"
       - name: Verify frozen identity and tests
         run: |
-          test "$(sha256sum gfs_mos_precipitation/DEVELOPMENT.md | cut -d' ' -f1)" = cd185e6f21a7f40f20f46c2b84a56fbbd3c2e80e6663a063b4b61490748c9641
+          test "$(sha256sum gfs_mos_precipitation/DEVELOPMENT.md | cut -d' ' -f1)" = 2ada86d21352f536931dfdf53a7eb019960fb2d75aae15eb5a7a0773fb28bcc4
           test "$(sha256sum stations.json | cut -d' ' -f1)" = 297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12
           python3 -m unittest -v gfs_mos_precipitation.test_develop gfs_mos_precipitation.test_workflow
       - name: Initialize immutable run manifest
@@ -33,7 +33,7 @@ jobs:
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg head_sha "$GITHUB_SHA" \
-            '{schema:"gfs_mos_precipitation_runner_run_v2",run_id:$run_id,head_sha:$head_sha,identity:"gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v2",development_sha256:"cd185e6f21a7f40f20f46c2b84a56fbbd3c2e80e6663a063b4b61490748c9641",research_only:true,reserved_evaluation_accessed:false,active_trading_capability_changed:false}' \
+            '{schema:"gfs_mos_precipitation_runner_run_v3",run_id:$run_id,head_sha:$head_sha,identity:"gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v3",development_sha256:"2ada86d21352f536931dfdf53a7eb019960fb2d75aae15eb5a7a0773fb28bcc4",research_only:true,reserved_evaluation_accessed:false,active_trading_capability_changed:false}' \
             > "$root/run.json"
       - name: Capture and evaluate training/development dates only
         id: development
@@ -42,7 +42,7 @@ jobs:
           timeout --signal=TERM --kill-after=30s 60m \
             python3 gfs_mos_precipitation/develop.py \
               --output-dir /tmp/mimir-gfs-mos-precipitation-development/capture \
-              --max-requests 23
+              --max-requests 24
           jq '{schema,identity,request_policy,design,coverage,evaluation:(.evaluation|del(.scored_predictions,.selected_predictions)),successor_freeze_permitted}' \
             /tmp/mimir-gfs-mos-precipitation-development/capture/development.json
       - name: Write portable checksums
