@@ -27,9 +27,10 @@ those dates are excluded.
 - Every training series must retain the exact public `Climate and Weather`, quadratic-fee, multiplier-one identity and
   an empty historical fee-change timeline.
 - Historical market pages are cursor-exhausted at most ten pages per series, with at most 1,000 rows per page. Duplicate,
-  malformed, cross-series, unsupported, provisional, or fee-waived rows fail closed. A market `occurrence_datetime`,
-  when present, must be exactly the following UTC date because low-temperature events publish on the next-day report
-  cycle. An exact finalized `result=scalar`, empty expiration value, and finite four-decimal settlement value inside
+  malformed, cross-series, unsupported, provisional, or fee-waived rows fail closed. A market `occurrence_datetime`
+  is provider administrative/finalization metadata rather than the climate-day identity: when present it must be a valid
+  UTC timestamp no earlier than the exact event-ticker date, but it cannot replace or shift that date. An exact finalized
+  `result=scalar`, empty expiration value, and finite four-decimal settlement value inside
   `$0.0000`–`$1.0000` causes the entire series/date event to be excluded with no outcome credit; any adjacent scalar
   identity fails closed. Fractional range settlements are never reinterpreted as binary outcomes.
 - Acquisition is capped at exactly 5,000 requests, at most four request starts per second, with no retry and terminal
