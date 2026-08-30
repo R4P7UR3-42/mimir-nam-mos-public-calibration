@@ -110,6 +110,7 @@ class DevelopTest(unittest.TestCase):
             {"STATION": "USW00013874", "DATE": "2024-01-02", "PRCP": "0.00", "PRCP_ATTRIBUTES": ",,W,2400"},
         ]).encode()
         outcomes = develop.parse_outcomes(payload, identities, dates)
+        self.assertTrue(outcomes[("KATL", "2024-01-01")]["label_available"])
         self.assertEqual(outcomes[("KATL", "2024-01-01")]["outcome_no"], 0)
         self.assertEqual(outcomes[("KATL", "2024-01-02")]["outcome_no"], 1)
 
@@ -118,6 +119,34 @@ class DevelopTest(unittest.TestCase):
             develop.parse_attributes("T,X,W,2400", "KATL|2024-01-01")
         with self.assertRaisesRegex(ValueError, "unsafe"):
             develop.parse_attributes("P,,W,2400", "KATL|2024-01-01")
+
+    def test_missing_prcp_and_attributes_is_unavailable_never_no(self) -> None:
+        identities = [{"station_id": "KATL", "ghcn_station_id": "USW00013874", "station_name": "ATL"}]
+        dates = [dt.date(2024, 5, 26)]
+        payload = json.dumps([{
+            "STATION": "USW00013874", "DATE": "2024-05-26", "NAME": "ATL",
+        }]).encode()
+        outcome = develop.parse_outcomes(payload, identities, dates)[("KATL", "2024-05-26")]
+        self.assertFalse(outcome["label_available"])
+        self.assertNotIn("outcome_no", outcome)
+        conflicting = json.dumps([{
+            "STATION": "USW00013874", "DATE": "2024-05-26", "PRCP": "0.00",
+        }]).encode()
+        with self.assertRaisesRegex(ValueError, "value/attribute identity conflicts"):
+            develop.parse_outcomes(conflicting, identities, dates)
+
+    def test_exact_99_percent_label_coverage_passes_and_adjacent_fails(self) -> None:
+        identities = [{"station_id": "KATL"}]
+        dates = [dt.date(2024, 1, 1) + dt.timedelta(days=index) for index in range(100)]
+        outcomes = {
+            ("KATL", value.isoformat()): {"label_available": index != 0}
+            for index, value in enumerate(dates)
+        }
+        report = develop.validate_label_coverage(outcomes, identities, dates, "history")
+        self.assertEqual(report[0]["coverage_ratio"], "0.99")
+        outcomes[("KATL", dates[1].isoformat())] = {"label_available": False}
+        with self.assertRaisesRegex(ValueError, "below 99 percent"):
+            develop.validate_label_coverage(outcomes, identities, dates, "history")
 
     def test_isd_mapping_may_end_before_development_when_it_overlaps_window(self) -> None:
         header = ["USAF", "WBAN", "STATION NAME", "CTRY", "STATE", "ICAO", "LAT", "LON", "ELEV(M)", "BEGIN", "END"]

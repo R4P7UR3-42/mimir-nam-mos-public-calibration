@@ -13,7 +13,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_workflow_binds_freeze_and_exact_request_budget(self) -> None:
         text = Path(".github/workflows/gfs-mos-precipitation-development.yml").read_text()
-        self.assertIn("2ada86d21352f536931dfdf53a7eb019960fb2d75aae15eb5a7a0773fb28bcc4", text)
+        self.assertIn("c5f44f308db1e3d579bb4a99dd528636e0f6d2aee19a6bb10c64baf4f1863edc", text)
         self.assertIn("297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12", text)
         self.assertIn("--max-requests 24", text)
         self.assertNotIn("2026-07-31&", text)
