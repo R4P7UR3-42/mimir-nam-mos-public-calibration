@@ -1,6 +1,6 @@
 # GFS MOS daily-precipitation development freeze
 
-- Identity: `gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v3`
+- Identity: `gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v4`
 - State: training/development only; no trading or production authority
 - Frozen history: 2024-01-01 through 2024-12-31
 - Frozen development targets: 2025-01-01 through 2025-11-23
@@ -30,10 +30,14 @@ Daily element inventory to contain exactly one mapped `PRCP` row for every stati
 degrees, beginning no later than the history year, and ending no earlier than the development year.
 
 Use exact NOAA NCEI Daily Summaries `PRCP` under that doubly checked identity. A nonzero value is rain. A zero value whose
-measurement flag is `T` is also rain; it must never be relabeled no-rain. Reject malformed attributes, nonblank quality
-flags, unsafe measurement flags, impossible values, duplicate identity, or incomplete coverage. NCEI is a model label
-proxy, not the Weather Company settlement source; even a positive result cannot establish exchange outcome agreement
-without later prospective official Kalshi settlements.
+measurement flag is `T` is also rain; it must never be relabeled no-rain. A row with both `PRCP` and `PRCP_ATTRIBUTES`
+absent is an unavailable label: persist its exact station/date, never impute or relabel it, and exclude it from model
+history, scoring, calibration, and economic results. Require available labels on at least 99% of dates independently for
+every station in both the history and development phases. Exact 99% passes and an immediately smaller ratio fails.
+Reject a row containing only one of those fields, malformed attributes, nonblank quality flags, unsafe measurement
+flags, impossible values, duplicate identity, missing station/date identity, or sub-99% station/phase coverage. NCEI is
+a model label proxy, not the Weather Company settlement source; even a positive result cannot establish exchange outcome
+agreement without later prospective official Kalshi settlements.
 
 The acquisition is credential-free, has exactly 24 requests (20 IEM, one ISD identity, one GHCN element inventory, and
 two NCEI outcome requests), has no retry, stops on HTTP 429, and refuses a production Mimir host. Persist raw response
@@ -97,3 +101,9 @@ all 20 mapped GHCN stations. V3 replaces only that cross-dataset availability in
 contract above. Neither correction inspects an outcome, changes a model or gate, selects the observed date by name,
 substitutes a forecast, or accesses the reserved evaluation window. V1 and v2 remain terminal source-contract artifacts
 and receive no statistical credit.
+
+Exact-main v3 run `33288268894` then reached all 7,320 expected history identities with no duplicates or unsafe
+attributes, but exact KDCA 2024-05-26 and KSEA 2024-04-24/25 rows had neither `PRCP` nor `PRCP_ATTRIBUTES`; it stopped
+before requesting development outcomes. V4 predeclares only the non-imputed high-coverage missing-label rule above.
+It does not inspect a development outcome, change the forecast model or any statistical/economic gate, or access the
+reserved evaluation window. V3 remains terminal and receives no statistical credit.

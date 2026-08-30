@@ -22,9 +22,9 @@ from zoneinfo import ZoneInfo
 
 getcontext().prec = 40
 ROOT = Path(__file__).resolve().parents[1]
-IDENTITY = "gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v3"
+IDENTITY = "gfs_mos_local_day_precipitation_jeffreys_wilson95_development_v4"
 SCHEMA = "gfs_mos_precipitation_development_v1"
-DEVELOPMENT_SHA256 = "2ada86d21352f536931dfdf53a7eb019960fb2d75aae15eb5a7a0773fb28bcc4"
+DEVELOPMENT_SHA256 = "c5f44f308db1e3d579bb4a99dd528636e0f6d2aee19a6bb10c64baf4f1863edc"
 STATIONS_SHA256 = "297e7cdf081c38212c3a1298d09921dfcb79fff9f3fa3bae6ccafc3b8ed09d12"
 IEM_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/mos.py"
 ISD_URL = "https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv"
@@ -49,6 +49,7 @@ PRICE = Decimal("0.70")
 MIN_EDGE = Decimal("0.015")
 MIN_HISTORY = 30
 MIN_COMPLETE_HISTORY = 358
+MIN_LABEL_COVERAGE = Decimal("0.99")
 BOOTSTRAP_SAMPLES = 10_000
 SCORE_BANDS = (
     (Decimal("0.00"), Decimal("0.50"), "0.00-0.50"),
@@ -417,6 +418,18 @@ def parse_outcomes(
         key = (str(identity["station_id"]), market_date)
         if key in outcomes:
             raise ValueError(f"NOAA NCEI PRCP is duplicated for {key[0]}|{key[1]}.")
+        has_precipitation = "PRCP" in row
+        has_attributes = "PRCP_ATTRIBUTES" in row
+        if not has_precipitation and not has_attributes:
+            outcomes[key] = {
+                "label_available": False,
+                "missing_label_reason": "prcp_and_attributes_absent",
+                "observation_source": "noaa_ncei_daily_summaries_prcp",
+                "observation_station_name": str(row.get("NAME") or identity["station_name"]),
+            }
+            continue
+        if has_precipitation != has_attributes:
+            raise ValueError(f"NOAA NCEI PRCP value/attribute identity conflicts for {key[0]}|{key[1]}.")
         try:
             precipitation = Decimal(str(row["PRCP"]))
         except Exception as error:
@@ -428,6 +441,8 @@ def parse_outcomes(
             raise ValueError(f"NOAA NCEI trace PRCP is nonzero for {key[0]}|{key[1]}.")
         outcome_no = int(precipitation == 0 and measurement != "T")
         outcomes[key] = {
+            "label_available": True,
+            "missing_label_reason": None,
             "observed_prcp_inches": str(precipitation),
             "outcome_no": outcome_no,
             "measurement_flag": measurement,
@@ -445,6 +460,38 @@ def parse_outcomes(
     if set(outcomes) != expected:
         raise ValueError("NOAA NCEI PRCP identity is not exact.")
     return outcomes
+
+
+def validate_label_coverage(
+    outcomes: dict[tuple[str, str], dict[str, object]],
+    identities: list[dict[str, object]],
+    dates: list[dt.date],
+    phase: str,
+) -> list[dict[str, object]]:
+    report = []
+    date_labels = [value.isoformat() for value in dates]
+    for identity in identities:
+        station_id = str(identity["station_id"])
+        rows = [outcomes[(station_id, market_date)] for market_date in date_labels]
+        available = sum(row.get("label_available") is True for row in rows)
+        missing = [
+            market_date for market_date, row in zip(date_labels, rows, strict=True)
+            if row.get("label_available") is False
+        ]
+        ratio = Decimal(available) / Decimal(len(rows))
+        if ratio < MIN_LABEL_COVERAGE:
+            raise ValueError(
+                f"NOAA NCEI PRCP label coverage is below 99 percent for {phase}|{station_id}: {available}/{len(rows)}."
+            )
+        report.append({
+            "phase": phase,
+            "station_id": station_id,
+            "available_labels": available,
+            "requested_labels": len(rows),
+            "coverage_ratio": str(ratio),
+            "missing_label_dates": missing,
+        })
+    return report
 
 
 def wilson_lower(successes: int, trials: int) -> Decimal:
@@ -519,11 +566,14 @@ def score_rows(rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], 
             market_date = dt.date.fromisoformat(str(row["market_date"]))
             if not DEVELOPMENT_START <= market_date <= DEVELOPMENT_END:
                 continue
+            if row.get("label_available") is not True:
+                continue
             cutoff = market_date - dt.timedelta(days=2)
             window_start = cutoff - dt.timedelta(days=364)
             history = [
                 prior for prior in station_rows
                 if window_start <= dt.date.fromisoformat(str(prior["market_date"])) <= cutoff
+                and prior.get("label_available") is True
             ]
             if not MIN_COMPLETE_HISTORY <= len(history) <= 365:
                 raise ValueError(f"Causal station history is incomplete for {station}|{market_date}: {len(history)}.")
@@ -712,6 +762,7 @@ def main() -> None:
     atomic_json(output / "raw" / "noaa-ghcnd-inventory.headers.json", inventory_headers)
     element_inventories = parse_ghcnd_inventory(inventory_payload, identities)
     outcomes: dict[tuple[str, str], dict[str, object]] = {}
+    label_coverage = []
     outcome_sources = [
         {"label": "identity", "url": ISD_URL, "sha256": sha256(isd_payload), "headers": isd_headers},
         {"label": "element_inventory", "url": GHCND_INVENTORY_URL, "sha256": sha256(inventory_payload), "headers": inventory_headers},
@@ -722,6 +773,7 @@ def main() -> None:
         create_once(output / "raw" / f"noaa-ncei-{label}-prcp.json", payload)
         atomic_json(output / "raw" / f"noaa-ncei-{label}-prcp.headers.json", headers)
         parsed = parse_outcomes(payload, identities, dates)
+        label_coverage.extend(validate_label_coverage(parsed, identities, dates, label))
         if set(outcomes).intersection(parsed):
             raise ValueError("History and development outcomes overlap.")
         outcomes.update(parsed)
@@ -784,12 +836,15 @@ def main() -> None:
             "global_missing_exact_12z_runtime_dates": [value.isoformat() for value in sorted(global_missing_runtimes)],
             "history_station_dates": sum(value not in global_missing_runtimes for value in history_dates) * EXPECTED_STATIONS,
             "development_station_dates": sum(value not in global_missing_runtimes for value in development_dates) * EXPECTED_STATIONS,
-            "trace_as_rain_rows": sum(row["measurement_flag"] == "T" for row in rows),
+            "trace_as_rain_rows": sum(row.get("measurement_flag") == "T" for row in rows),
+            "available_label_rows": sum(row.get("label_available") is True for row in rows),
+            "missing_label_rows": sum(row.get("label_available") is False for row in rows),
             "four_interval_rows": sum(len(row["selected_interval_ends_utc"]) == 4 for row in rows),
             "five_interval_rows": sum(len(row["selected_interval_ends_utc"]) == 5 for row in rows),
         },
         "station_identities": identities,
         "station_element_inventories": element_inventories,
+        "label_coverage": label_coverage,
         "forecast_sources": forecast_sources,
         "outcome_sources": outcome_sources,
         "evaluation": result,
